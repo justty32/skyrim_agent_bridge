@@ -5,7 +5,7 @@ Linux-side agent can read game state, drive the console, grab screenshots and ha
 keyboard back to a human — without touching the OS input/screen layer at all.
 
 The eyes and hands go *into* the game process. See
-[`workflows/plans/ai-ingame-qa-loop.md`](../../../../workflows/plans/ai-ingame-qa-loop.md)
+[`workflows/plans/ai-ingame-qa-loop.md`](../../workflows/plans/ai-ingame-qa-loop.md)
 (decision D1) for why: the host is Wayland with no screenshot tool installed, `xdotool` is
 useless against non-XWayland windows, and the game lives behind Proton's pressure-vessel —
 "screenshot the screen and fake keypresses" would be fragile and unreproducible.
