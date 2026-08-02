@@ -1,0 +1,11 @@
+--- a/include/RE/C/CalibrationOptionMenu.h
++++ b/include/RE/C/CalibrationOptionMenu.h
+@@ -24,6 +24,8 @@
+                // members
+                bool unk50;     // 50 - Set in ProcessMessage, cleared in CanProcess
+                char pad51[7];  // 51
++
++               void operator delete(void* p) { IMenu::operator delete(p); }
+        private:
+                KEEP_FOR_RE()
+        };

@@ -1,0 +1,94 @@
+{
+  "name": "smoke",
+  "description": "Whole-loop smoke test: install a ModForge plugin, boot the game, prove the engine loaded it, move the player, tear everything back down. Uses ModForgeNavmeshNoop.esp because it changes nothing observable — this test is about the harness, not the mod.",
+  "baseline": "Save3_474D5830_0_507269736F6E6572_Tamriel_000008_20260802003106_1_1",
+  "defaults": {
+    "settle_seconds": 8,
+    "assert_retry_seconds": 30
+  },
+  "steps": [
+    {
+      "type": "kill",
+      "mo2": true,
+      "label": "clear any running session so the profile is writable"
+    },
+    {
+      "type": "install",
+      "source": "../../../../out/ModForgeNavmeshNoop.esp",
+      "mod_name": "QaSmoke"
+    },
+    {
+      "type": "launch",
+      "wait": 240
+    },
+    {
+      "type": "assert_state",
+      "label": "the engine actually loaded the plugin",
+      "include": [
+        "plugins"
+      ],
+      "expect": {
+        "plugins[*].name": {
+          "eq": "ModForgeNavmeshNoop.esp"
+        }
+      }
+    },
+    {
+      "type": "load_baseline"
+    },
+    {
+      "type": "assert_state",
+      "label": "baseline put us outside Whiterun",
+      "expect": {
+        "player.cell": {
+          "eq": "WhiterunExterior15"
+        },
+        "player.worldspace": {
+          "eq": "Tamriel"
+        },
+        "player.flags.dead": false
+      }
+    },
+    {
+      "type": "console",
+      "cmd": "coc WhiterunBanneredMare",
+      "settle": 2
+    },
+    {
+      "type": "assert_state",
+      "label": "we are in the tavern and it has people in it",
+      "include": [
+        "nearby_actors"
+      ],
+      "radius": 2048,
+      "expect": {
+        "player.cell_form_id": {
+          "eq": 90206
+        },
+        "player.interior": true,
+        "nearby_actors[*]": {
+          "count_gte": 1
+        },
+        "nearby_actors[*].name": {
+          "eq": "Hulda"
+        }
+      },
+      "comment": "Asserts cell_form_id, NOT cell. EditorID strings come from the winning record and any plugin that overrides it without an EDID subrecord erases them — ModForgeNavmeshNoop.esp does exactly that to this cell. FormIDs are engine identity and cannot be erased."
+    },
+    {
+      "type": "handoff_user",
+      "message": "看一眼遊戲畫面：人應該站在戰友蜜酒館裡，NPC 正常站立、沒有 T-pose 或掉進地板。",
+      "expect": "tavern interior renders normally"
+    }
+  ],
+  "teardown": [
+    {
+      "type": "kill",
+      "mo2": true
+    },
+    {
+      "type": "uninstall",
+      "mod_name": "QaSmoke"
+    }
+  ]
+}
