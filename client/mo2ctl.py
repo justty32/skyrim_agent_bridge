@@ -12,6 +12,13 @@ the rest of the toolchain is mid-rebuild.
   mo2ctl inspect <archive-or-dir> [--write-choices PATH]
   mo2ctl install <archive-or-dir-or-esp> [--name NAME] [--priority bottom] [--fomod-choices PATH] [--no-enable] [--force]
   mo2ctl uninstall <name> [--keep-files]
+  mo2ctl profile-status
+  mo2ctl profile-semantics [--ref HEAD]
+  mo2ctl profile-absorb-churn
+  mo2ctl select-profile <profile>
+  mo2ctl try-begin <name>
+  mo2ctl try-fail [--uninstall MOD]
+  mo2ctl try-pass [-m MESSAGE]
   mo2ctl enable <name>
   mo2ctl disable <name>
   mo2ctl launch [--wait SECONDS] [--no-wait]
@@ -24,6 +31,7 @@ Everything that mutates MO2 state refuses to run while MO2 or the game is up; se
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -33,7 +41,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from xml.etree import ElementTree as ET
 import zipfile
@@ -48,6 +56,13 @@ PLUGIN_SUFFIXES = (".esp", ".esm", ".esl")
 ARCHIVE_SUFFIXES = (".zip", ".7z", ".rar")
 BSA_SUFFIXES = (".bsa", ".ba2")
 FOMOD_CHOICES_FORMAT = "mo2ctl-fomod-choices-v1"
+PROFILE_MANIFEST_FORMAT = "mo2ctl-profile-manifest-v1"
+PROFILE_MAIN_BRANCH = "main"
+ENGINE_LOADORDER_CHURN = {
+    "ccbgssse068-bloodfall.esl",
+    "ccbgssse069-contest.esl",
+    "ccvsvsse004-beafarmer.esl",
+}
 
 # Directory names that make a folder recognisable as a Skyrim `Data`-relative mod root.
 DATA_DIR_NAMES = {
@@ -78,6 +93,14 @@ class Env:
     @property
     def profile_dir(self) -> Path:
         return self.root / "profiles" / self.profile
+
+    @property
+    def profiles_repo(self) -> Path:
+        return self.root / "profiles"
+
+    @property
+    def manifest(self) -> Path:
+        return self.profiles_repo / "manifest.json"
 
     @property
     def modlist(self) -> Path:
@@ -166,6 +189,279 @@ def write_file(tf: TextFile, *, backup: bool = True) -> Path | None:
     text = tf.eol.join(tf.lines) + (tf.eol if tf.trailing_eol else "")
     tf.path.write_bytes(text.encode("utf-8"))
     return made
+
+
+def utc_stamp() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def sha256_file(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def read_manifest(env: Env) -> dict:
+    if not env.manifest.is_file():
+        return {
+            "format": PROFILE_MANIFEST_FORMAT,
+            "mods": {},
+        }
+    try:
+        data = json.loads(env.manifest.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise Fail(f"cannot parse manifest: {env.manifest}: {exc}") from exc
+    if data.get("format") != PROFILE_MANIFEST_FORMAT:
+        raise Fail(f"unsupported manifest format in {env.manifest}")
+    if not isinstance(data.get("mods"), dict):
+        raise Fail(f"manifest mods must be an object: {env.manifest}")
+    return data
+
+
+def write_manifest(env: Env, data: dict) -> None:
+    data["format"] = PROFILE_MANIFEST_FORMAT
+    data["updated_at"] = utc_stamp()
+    env.manifest.write_text(json.dumps(data, indent=1, ensure_ascii=False, sort_keys=True) + "\n",
+                            encoding="utf-8")
+
+
+def manifest_from_git(env: Env, ref: str) -> dict:
+    proc = git_profiles(env, ["show", f"{ref}:manifest.json"], check=False)
+    if proc.returncode != 0:
+        return {"format": PROFILE_MANIFEST_FORMAT, "mods": {}}
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise Fail(f"cannot parse manifest from {ref}: {exc}") from exc
+    if data.get("format") != PROFILE_MANIFEST_FORMAT:
+        return {"format": PROFILE_MANIFEST_FORMAT, "mods": {}}
+    if not isinstance(data.get("mods"), dict):
+        return {"format": PROFILE_MANIFEST_FORMAT, "mods": {}}
+    return data
+
+
+def update_manifest_for_install(env: Env, result: dict, resolved: "ResolvedSource",
+                                args) -> dict:
+    manifest = read_manifest(env)
+    source = Path(args.source).expanduser()
+    digest = sha256_file(source)
+    entry = {
+        "name": result["installed"],
+        "profile": env.profile,
+        "enabled": result["enabled"],
+        "priority": result["priority"],
+        "version": resolved.version or args.version,
+        "source_path": str(source),
+        "source_url": getattr(args, "source_url", None) or None,
+        "source_kind": "archive" if source.suffix.lower() in ARCHIVE_SUFFIXES else
+                       "file" if source.is_file() else "directory",
+        "sha256": digest,
+        "archive_library": archive_library_status(digest),
+        "plugins": result["plugins_found"],
+        "archives": result["archives_found"],
+        "fomod_choices": resolved.fomod_choices,
+        "comment": args.comment,
+        "installed_at": utc_stamp(),
+    }
+    manifest["mods"][result["installed"]] = entry
+    write_manifest(env, manifest)
+    return entry
+
+
+def remove_manifest_entry(env: Env, name: str) -> bool:
+    manifest = read_manifest(env)
+    if name not in manifest["mods"]:
+        return False
+    del manifest["mods"][name]
+    write_manifest(env, manifest)
+    return True
+
+
+def git_profiles(env: Env, argv: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
+    if not (env.profiles_repo / ".git").is_dir():
+        raise Fail(f"profile repo is not initialized: {env.profiles_repo}")
+    proc = subprocess.run(
+        ["git", *argv],
+        cwd=env.profiles_repo,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if check and proc.returncode != 0:
+        msg = proc.stderr.strip() or proc.stdout.strip() or f"git {' '.join(argv)} failed"
+        raise Fail(msg)
+    return proc
+
+
+def git_branch(env: Env) -> str:
+    return git_profiles(env, ["branch", "--show-current"]).stdout.strip()
+
+
+def git_head(env: Env) -> str:
+    return git_profiles(env, ["rev-parse", "--short", "HEAD"]).stdout.strip()
+
+
+def git_porcelain(env: Env) -> list[str]:
+    out = git_profiles(env, ["status", "--porcelain"]).stdout
+    return [ln for ln in out.splitlines() if ln]
+
+
+def dirty_paths(lines: list[str]) -> list[str]:
+    paths = []
+    for line in lines:
+        path = line[3:] if len(line) > 3 else ""
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        if path:
+            paths.append(path)
+    return paths
+
+
+def engine_churn_paths(env: Env) -> set[str]:
+    return {
+        f"{env.profile}/loadorder.txt",
+        f"{env.profile}/plugins.txt",
+    }
+
+
+def absorb_engine_churn(env: Env, message: str | None = None, *, force: bool = False) -> dict:
+    dirty = git_porcelain(env)
+    if not dirty:
+        return {"absorbed": False, "reason": "profile repo already clean"}
+
+    paths = dirty_paths(dirty)
+    unexpected = [p for p in paths if p not in engine_churn_paths(env)]
+    before = profile_semantics(env, "HEAD")
+    after = profile_semantics(env, None)
+    diff = semantic_diff(before, after)
+    if (unexpected or diff) and not force:
+        raise Fail(
+            "profile repo has non-churn changes; review before opening a try branch: "
+            + json.dumps({"paths": unexpected, "semantic_diff": diff}, ensure_ascii=False)
+        )
+
+    git_profiles(env, ["add", *paths])
+    git_profiles(env, ["commit", "-m", message or "Absorb MO2 engine churn"])
+    return {
+        "absorbed": True,
+        "commit": git_head(env),
+        "paths": paths,
+        "semantic_diff": diff,
+        "forced": force,
+    }
+
+
+def require_clean_profile_repo(env: Env) -> None:
+    dirty = git_porcelain(env)
+    if dirty:
+        raise Fail("profile repo is dirty; run profile-absorb-churn if this is MO2 engine churn, or review it before starting a new branch")
+
+
+def slug_branch(text: str) -> str:
+    keep = []
+    last_dash = False
+    for ch in text.strip().lower():
+        if ch.isalnum():
+            keep.append(ch)
+            last_dash = False
+        elif not last_dash:
+            keep.append("-")
+            last_dash = True
+    slug = "".join(keep).strip("-")
+    return slug or "mod"
+
+
+def text_file_from_string(path: Path, text: str) -> TextFile:
+    eol = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(eol)
+    trailing = bool(lines) and lines[-1] == ""
+    if trailing:
+        lines.pop()
+    return TextFile(path=path, lines=lines, eol=eol, trailing_eol=trailing)
+
+
+def profile_text_at(env: Env, ref: str | None, rel: str) -> str:
+    path = env.profiles_repo / rel
+    if ref is None:
+        if not path.is_file():
+            return ""
+        return path.read_bytes().decode("utf-8", errors="replace")
+    proc = git_profiles(env, ["show", f"{ref}:{rel}"], check=False)
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout
+
+
+def profile_semantics(env: Env, ref: str | None = None) -> dict:
+    profile_rel = f"{env.profile}/"
+    modlist = text_file_from_string(env.modlist, profile_text_at(env, ref, profile_rel + "modlist.txt"))
+    plugins = text_file_from_string(env.plugins, profile_text_at(env, ref, profile_rel + "plugins.txt"))
+    loadorder = text_file_from_string(env.loadorder, profile_text_at(env, ref, profile_rel + "loadorder.txt"))
+    archives = text_file_from_string(env.archives, profile_text_at(env, ref, profile_rel + "archives.txt"))
+
+    mods = modlist_entries(modlist)
+    enabled_mods = [name for name, enabled in mods if enabled]
+    active_plugins = [
+        ln.lstrip("*").strip()
+        for ln in plugins.lines
+        if ln.startswith("*") and ln.lstrip("*").strip()
+    ]
+    plugin_order = [
+        ln.strip()
+        for ln in loadorder.lines
+        if ln.strip()
+        and not ln.startswith("#")
+        and ln.strip().lower() not in ENGINE_LOADORDER_CHURN
+    ]
+    archive_entries = [
+        ln.strip().lstrip("*")
+        for ln in archives.lines
+        if ln.strip() and not ln.startswith("#")
+    ]
+    return {
+        "enabled_mods": sorted(enabled_mods, key=str.lower),
+        "mod_order": [name for name, _ in mods],
+        "active_plugins": sorted(active_plugins, key=str.lower),
+        "plugin_order": plugin_order,
+        "archives": sorted(archive_entries, key=str.lower),
+    }
+
+
+def semantic_diff(before: dict, after: dict) -> dict:
+    diff = {}
+    for key in sorted(set(before) | set(after)):
+        if before.get(key) != after.get(key):
+            diff[key] = {"before": before.get(key), "after": after.get(key)}
+    return diff
+
+
+def archive_library_status(sha256: str | None) -> str:
+    if not sha256:
+        return "not_applicable"
+    if len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256.lower()):
+        return "unchecked"
+    exe = shutil.which("mongosh") or shutil.which("mongo")
+    if not exe:
+        return "unchecked"
+    js = f'const n=db.getSiblingDB("skyrim").archives.countDocuments({{_id:"{sha256.lower()}"}}); print(n);'
+    try:
+        proc = subprocess.run(
+            [exe, "mongodb://127.0.0.1:27018/skyrim", "--quiet", "--eval", js],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=0.5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unchecked"
+    if proc.returncode != 0:
+        return "unchecked"
+    last = proc.stdout.strip().splitlines()[-1:] or [""]
+    return "present" if last[0].strip() not in {"", "0"} else "missing"
 
 
 BACKUP_DIR_NAME = ".mo2ctl-backups"
@@ -268,8 +564,8 @@ def profile_lock_reason() -> str | None:
 # modlist.txt
 #
 # Line 1 is MO2's header comment and must survive. Entries are `+Name` (enabled)
-# or `-Name` (disabled), and the file reads top = highest priority, so a new mod
-# goes at line 2 to win conflicts — which is what you want for a thing under test.
+# or `-Name` (disabled), and the file reads top = highest priority. Unverified
+# third-party mods default to bottom so they do not silently win every file conflict.
 # ---------------------------------------------------------------------------
 
 
@@ -948,7 +1244,7 @@ def cmd_install(env: Env, args) -> dict:
     resolved = resolve_source(
         Path(args.source),
         args.name,
-        Path(args.fomod_choices) if args.fomod_choices else None,
+        Path(args.fomod_choices) if getattr(args, "fomod_choices", None) else None,
     )
     src_dir, loose, name = resolved.source_dir, resolved.loose_files, resolved.name
     dest = env.mods / name
@@ -981,7 +1277,7 @@ def cmd_install(env: Env, args) -> dict:
         write_meta_ini(dest, resolved.version or args.version, args.comment)
 
         tf = read_file(env.modlist)
-        priority = place_mod(tf, name, not args.no_enable, args.priority)
+        priority = place_mod(tf, name, not args.no_enable, getattr(args, "priority", "bottom"))
         write_file(tf)
 
         plugins = plugin_files(dest)
@@ -992,7 +1288,7 @@ def cmd_install(env: Env, args) -> dict:
         if resolved.cleanup:
             shutil.rmtree(resolved.cleanup, ignore_errors=True)
 
-    return {
+    result = {
         "installed": name,
         "path": str(dest),
         "enabled": not args.no_enable,
@@ -1005,6 +1301,9 @@ def cmd_install(env: Env, args) -> dict:
         "fomod_choices": "mo2ctl-fomod-choices.json" if resolved.fomod_choices else None,
         "warnings": warnings,
     }
+    if not getattr(args, "no_manifest", False):
+        result["manifest"] = update_manifest_for_install(env, result, resolved, args)
+    return result
 
 
 def write_meta_ini(dest: Path, version: str, comment: str) -> None:
@@ -1044,12 +1343,168 @@ def cmd_uninstall(env: Env, args) -> dict:
     if idx is None and not removed_files and not removed_plugins and not removed_archives:
         raise Fail(f"nothing to uninstall: {name} is not in the modlist and has no folder")
 
+    manifest_removed = False if getattr(args, "keep_manifest", False) else remove_manifest_entry(env, name)
+
     return {
         "uninstalled": name,
         "removed_from_modlist": idx is not None,
         "removed_plugins": removed_plugins,
         "removed_archives": removed_archives,
         "removed_files": removed_files,
+        "removed_manifest": manifest_removed,
+    }
+
+
+def cmd_profile_status(env: Env, args) -> dict:
+    branch = git_branch(env)
+    dirty = git_porcelain(env)
+    manifest = read_manifest(env)
+    return {
+        "profile_repo": str(env.profiles_repo),
+        "profile": env.profile,
+        "branch": branch,
+        "head": git_head(env),
+        "clean": not dirty,
+        "dirty": dirty,
+        "manifest_mods": sorted(manifest["mods"].keys()),
+        "profile_writable": profile_lock_reason() is None,
+        "profile_lock_reason": profile_lock_reason(),
+    }
+
+
+def cmd_profile_semantics(env: Env, args) -> dict:
+    current = profile_semantics(env, None)
+    base = profile_semantics(env, args.ref)
+    return {
+        "profile": env.profile,
+        "ref": args.ref,
+        "equivalent": current == base,
+        "diff": semantic_diff(base, current),
+        "current": current if args.show else None,
+    }
+
+
+def cmd_profile_absorb_churn(env: Env, args) -> dict:
+    require_writable(args)
+    return absorb_engine_churn(env, args.message, force=args.force)
+
+
+def cmd_select_profile(env: Env, args) -> dict:
+    require_writable(args)
+    target = args.profile
+    if any(ch in target for ch in "\r\n()"):
+        raise Fail(f"unsafe profile name: {target!r}")
+    if not (env.root / "profiles" / target).is_dir():
+        raise Fail(f"profile not found: {target}")
+
+    ini = env.root / "ModOrganizer.ini"
+    if not ini.is_file():
+        raise Fail(f"ModOrganizer.ini not found: {ini}")
+    raw = ini.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    hits = [i for i, line in enumerate(lines) if line.split(b"=", 1)[0].strip() == b"selected_profile"]
+    if len(hits) != 1:
+        raise Fail(f"selected_profile must appear exactly once in {ini}; found {len(hits)}")
+    idx = hits[0]
+    old_line = lines[idx]
+    ending = b"\r\n" if old_line.endswith(b"\r\n") else b"\n" if old_line.endswith(b"\n") else b""
+    old_value = old_line[:-len(ending)] if ending else old_line
+    _, _, value = old_value.partition(b"=")
+    before = value.decode("utf-8", errors="replace").strip()
+    new_line = f"selected_profile=@ByteArray({target})".encode("utf-8") + ending
+    lines[idx] = new_line
+    ini.write_bytes(b"".join(lines))
+
+    verify = ini.read_bytes()
+    needle = f"selected_profile=@ByteArray({target})".encode("utf-8")
+    if verify.count(needle) != 1:
+        raise Fail(f"profile switch verification failed in {ini}")
+    return {
+        "ini": str(ini),
+        "before": before,
+        "after": f"@ByteArray({target})",
+        "eol": "CRLF" if ending == b"\r\n" else "LF" if ending == b"\n" else "none",
+    }
+
+
+def cmd_try_begin(env: Env, args) -> dict:
+    require_writable(args)
+    absorbed = absorb_engine_churn(env, getattr(args, "absorb_message", None), force=False)
+    require_clean_profile_repo(env)
+    branch = args.branch or f"try/{slug_branch(args.name)}"
+    if not branch.startswith("try/") and not args.force:
+        raise Fail("try branch must start with try/ (use --force to override)")
+    git_profiles(env, ["checkout", "-b", branch])
+    return {
+        "started": branch,
+        "base": PROFILE_MAIN_BRANCH,
+        "head": git_head(env),
+        "absorbed_churn": absorbed,
+    }
+
+
+def mods_added_since_main(env: Env) -> list[str]:
+    current = read_manifest(env).get("mods", {})
+    base = manifest_from_git(env, PROFILE_MAIN_BRANCH).get("mods", {})
+    return sorted(name for name in current.keys() if name not in base)
+
+
+def cmd_try_fail(env: Env, args) -> dict:
+    require_writable(args)
+    branch = git_branch(env)
+    if not branch.startswith("try/") and not args.force:
+        raise Fail(f"refusing to fail non-try branch: {branch} (use --force to override)")
+
+    uninstall_names = sorted(set(mods_added_since_main(env)) | set(args.uninstall or []))
+    uninstall_results = []
+    for name in uninstall_names:
+        try:
+            uninstall_args = argparse.Namespace(name=name, keep_files=False, keep_manifest=False,
+                                                force=args.force)
+            uninstall_results.append(cmd_uninstall(env, uninstall_args))
+        except Fail as exc:
+            uninstall_results.append({"uninstalled": name, "error": str(exc)})
+
+    git_profiles(env, ["restore", "--worktree", "--staged", "."])
+    git_profiles(env, ["clean", "-fd"])
+    git_profiles(env, ["checkout", PROFILE_MAIN_BRANCH])
+    if branch != PROFILE_MAIN_BRANCH:
+        git_profiles(env, ["branch", "-D", branch])
+
+    return {
+        "failed": branch,
+        "checked_out": PROFILE_MAIN_BRANCH,
+        "deleted_branch": branch if branch != PROFILE_MAIN_BRANCH else None,
+        "uninstalled": uninstall_results,
+        "head": git_head(env),
+    }
+
+
+def cmd_try_pass(env: Env, args) -> dict:
+    require_writable(args)
+    branch = git_branch(env)
+    if not branch.startswith("try/") and not args.force:
+        raise Fail(f"refusing to pass non-try branch: {branch} (use --force to override)")
+
+    dirty = git_porcelain(env)
+    committed = None
+    if dirty:
+        git_profiles(env, ["add", "."])
+        msg = args.message or f"Validate {branch.removeprefix('try/')}"
+        git_profiles(env, ["commit", "-m", msg])
+        committed = git_head(env)
+
+    git_profiles(env, ["checkout", PROFILE_MAIN_BRANCH])
+    git_profiles(env, ["merge", "--ff-only", branch])
+    if args.delete_branch and branch != PROFILE_MAIN_BRANCH:
+        git_profiles(env, ["branch", "-D", branch])
+
+    return {
+        "passed": branch,
+        "checked_out": PROFILE_MAIN_BRANCH,
+        "committed": committed,
+        "merged_head": git_head(env),
+        "deleted_branch": branch if args.delete_branch and branch != PROFILE_MAIN_BRANCH else None,
     }
 
 
@@ -1183,14 +1638,54 @@ def build_parser() -> argparse.ArgumentParser:
                    help="modlist placement: bottom, top, before:<mod>, or after:<mod> (default: bottom)")
     s.add_argument("--fomod-choices", help="replay choices JSON written by `mo2ctl inspect --write-choices`")
     s.add_argument("--version", default="0.0.0")
+    s.add_argument("--source-url", help="where the archive came from, for manifest.json")
+    s.add_argument("--no-manifest", action="store_true", help="do not update profiles/manifest.json")
     s.add_argument("--comment", default="Installed by mo2ctl (AI QA loop). TEST HARNESS — safe to remove.")
     s.set_defaults(func=cmd_install)
 
     s = sub_add("uninstall", "remove a mod from the profile and delete its folder")
     s.add_argument("name")
     s.add_argument("--keep-files", action="store_true", help="deregister but leave mods/<name> on disk")
+    s.add_argument("--keep-manifest", action="store_true", help="leave profiles/manifest.json untouched")
     s.add_argument("--force", action="store_true")
     s.set_defaults(func=cmd_uninstall)
+
+    s = sub_add("profile-status", "report profile git branch, cleanliness, and manifest contents")
+    s.set_defaults(func=cmd_profile_status)
+
+    s = sub_add("profile-semantics", "compare current profile state to a git ref by load-order semantics")
+    s.add_argument("--ref", default="HEAD", help="profile repo ref to compare against (default: HEAD)")
+    s.add_argument("--show", action="store_true", help="include the current semantic snapshot")
+    s.set_defaults(func=cmd_profile_semantics)
+
+    s = sub_add("profile-absorb-churn", "commit known MO2 engine churn when profile semantics did not change")
+    s.add_argument("-m", "--message", help="profile repo commit message")
+    s.add_argument("--force", action="store_true", help="commit despite semantic or path differences")
+    s.set_defaults(func=cmd_profile_absorb_churn)
+
+    s = sub_add("select-profile", "switch ModOrganizer.ini selected_profile while preserving line endings")
+    s.add_argument("profile")
+    s.add_argument("--force", action="store_true", help="ignore the running-process lock")
+    s.set_defaults(func=cmd_select_profile)
+
+    s = sub_add("try-begin", "create and check out a clean try/<mod> profile branch")
+    s.add_argument("name", help="mod or experiment name")
+    s.add_argument("--branch", help="explicit branch name (default: try/<slug>)")
+    s.add_argument("--absorb-message", help="commit message if known MO2 engine churn must be absorbed first")
+    s.add_argument("--force", action="store_true", help="allow a branch name outside try/")
+    s.set_defaults(func=cmd_try_begin)
+
+    s = sub_add("try-fail", "abort the current try/ branch and restore profile main")
+    s.add_argument("--uninstall", action="append",
+                   help="extra mod folder to remove from MO2 mods/ before restoring the profile")
+    s.add_argument("--force", action="store_true", help="allow aborting outside try/")
+    s.set_defaults(func=cmd_try_fail)
+
+    s = sub_add("try-pass", "commit the current try/ branch and fast-forward profile main")
+    s.add_argument("-m", "--message", help="profile repo commit message")
+    s.add_argument("--delete-branch", action="store_true", help="delete the try/ branch after merge")
+    s.add_argument("--force", action="store_true", help="allow passing outside try/")
+    s.set_defaults(func=cmd_try_pass)
 
     s = sub_add("enable", "turn a mod on in the profile")
     s.add_argument("name")

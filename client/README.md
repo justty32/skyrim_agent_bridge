@@ -23,6 +23,13 @@ anything is a harness you stop using.
 ./mo2ctl.py inspect <archive-or-dir> [--write-choices choices.json]
 ./mo2ctl.py install <archive-or-dir-or-esp> [--name NAME] [--priority bottom] [--fomod-choices choices.json] [--no-enable]
 ./mo2ctl.py uninstall <name> [--keep-files]
+./mo2ctl.py profile-status
+./mo2ctl.py profile-semantics [--ref HEAD]
+./mo2ctl.py profile-absorb-churn
+./mo2ctl.py select-profile QA|Default
+./mo2ctl.py try-begin "Mod Name"
+./mo2ctl.py try-fail
+./mo2ctl.py try-pass -m "Validate Mod Name"
 ./mo2ctl.py enable|disable <name>
 ./mo2ctl.py launch [--wait 240]          # SKSE through MO2, waits for the bridge
 ./mo2ctl.py kill [--mo2]
@@ -57,6 +64,21 @@ When an enabled mod contributes `.bsa` / `.ba2` files whose basename does not ma
 of its enabled plugins, `install` appends those archive names to the active profile's
 `archives.txt`; `uninstall` removes the same unmanaged archive entries.
 
+`install` also updates `profiles/manifest.json` by default. The entry records mod name,
+profile, version, source path / URL, archive sha256, FOMOD choices, plugins, and BSA
+files. When `mongosh` or `mongo` can reach `mongodb://127.0.0.1:27018/skyrim`, the
+sha256 is checked against the `archives` collection where `_id` is the digest; otherwise
+the entry records `archive_library: unchecked`.
+
+Profile git helpers deliberately compare profile state semantically, not byte-for-byte.
+The current known churn is: Skyrim may write
+`ccbgssse068-bloodfall.esl`, `ccbgssse069-contest.esl`, and
+`ccvsvsse004-beafarmer.esl` back into `loadorder.txt`, and MO2 may rewrite the
+`plugins.txt` header / file formatting. `profile-semantics` ignores comments and those
+three loadorder entries, then compares enabled mod set, mod order, active plugin set,
+plugin relative order, and `archives.txt` entries. `try-begin` first absorbs clean
+engine churn into a profile repo commit, then opens `try/<mod>`.
+
 ### Verified end-to-end
 
 Full install → launch → assert → uninstall cycle against the live 109-mod load order
@@ -67,8 +89,9 @@ on 2026-08-02, no GUI at any point:
 3. `GET /state?include=plugins` → `{"name": "ModForgeNavmeshNoop.esp", "index": 26}`
 4. `POST /console {"cmd": "load <baseline>"}` → `/state` reports `WhiterunExterior15`
 5. `kill --mo2`, `uninstall QaNoop`
-6. `modlist.txt`, `plugins.txt`, `loadorder.txt` all **byte-identical** to their
-   pre-install backups
+6. profile semantics match the pre-install state: same enabled mod set, same mod order,
+   same active plugin set, same plugin relative order after known engine churn is
+   ignored, and same `archives.txt` entries
 
 Step 6 is the one worth keeping. A QA loop that leaves residue in the profile is a
 loop you can only run once.
