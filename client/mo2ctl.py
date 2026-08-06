@@ -9,7 +9,8 @@ stdlib only, on purpose: this runs before anything is built and has to keep work
 the rest of the toolchain is mid-rebuild.
 
   mo2ctl status [--json]
-  mo2ctl install <dir-or-esp> [--name NAME] [--no-enable] [--force]
+  mo2ctl inspect <archive-or-dir> [--write-choices PATH]
+  mo2ctl install <archive-or-dir-or-esp> [--name NAME] [--priority bottom] [--fomod-choices PATH] [--no-enable] [--force]
   mo2ctl uninstall <name> [--keep-files]
   mo2ctl enable <name>
   mo2ctl disable <name>
@@ -29,10 +30,13 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from xml.etree import ElementTree as ET
+import zipfile
 
 import bridge
 
@@ -41,6 +45,9 @@ DEFAULT_PROFILE = "Default"
 STEAM_APPID = "489830"
 
 PLUGIN_SUFFIXES = (".esp", ".esm", ".esl")
+ARCHIVE_SUFFIXES = (".zip", ".7z", ".rar")
+BSA_SUFFIXES = (".bsa", ".ba2")
+FOMOD_CHOICES_FORMAT = "mo2ctl-fomod-choices-v1"
 
 # Directory names that make a folder recognisable as a Skyrim `Data`-relative mod root.
 DATA_DIR_NAMES = {
@@ -83,6 +90,10 @@ class Env:
     @property
     def loadorder(self) -> Path:
         return self.profile_dir / "loadorder.txt"
+
+    @property
+    def archives(self) -> Path:
+        return self.profile_dir / "archives.txt"
 
     @property
     def mo2_exe(self) -> Path:
@@ -291,6 +302,32 @@ def set_mod_state(env: Env, name: str, enabled: bool) -> str:
     return "changed"
 
 
+def priority_insert_index(tf: TextFile, spec: str) -> int:
+    entries = [(i, line[1:].strip()) for i, line in enumerate(tf.lines) if line[:1] in "+-"]
+    if spec == "bottom":
+        return (entries[-1][0] + 1) if entries else len(tf.lines)
+    if spec == "top":
+        return entries[0][0] if entries else len(tf.lines)
+
+    direction, sep, anchor = spec.partition(":")
+    if sep != ":" or direction not in {"before", "after"} or not anchor:
+        raise Fail("priority must be bottom, top, before:<mod name>, or after:<mod name>")
+    anchor_idx = modlist_index(tf, anchor)
+    if anchor_idx is None:
+        raise Fail(f"priority anchor not found in modlist: {anchor}")
+    return anchor_idx if direction == "before" else anchor_idx + 1
+
+
+def place_mod(tf: TextFile, name: str, enabled: bool, priority: str) -> str:
+    prefix = "+" if enabled else "-"
+    old_idx = modlist_index(tf, name)
+    if old_idx is not None:
+        tf.lines.pop(old_idx)
+    insert_at = priority_insert_index(tf, priority)
+    tf.lines.insert(insert_at, prefix + name)
+    return priority
+
+
 # ---------------------------------------------------------------------------
 # plugins.txt / loadorder.txt
 #
@@ -350,6 +387,501 @@ def remove_plugins(env: Env, names: list[str]) -> list[str]:
     return removed
 
 
+def bsa_files(mod_dir: Path) -> list[str]:
+    return sorted(
+        p.name for p in mod_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in BSA_SUFFIXES
+    )
+
+
+def plugin_stems(names: list[str]) -> set[str]:
+    return {Path(name).stem.lower() for name in names}
+
+
+def add_archives(env: Env, bsa_names: list[str], plugin_names: list[str]) -> list[str]:
+    unmanaged = [name for name in bsa_names if Path(name).stem.lower() not in plugin_stems(plugin_names)]
+    if not unmanaged:
+        return []
+    if not env.archives.is_file():
+        raise Fail(f"missing profile file: {env.archives}")
+    archives = read_file(env.archives)
+    have = {ln.strip().lower() for ln in archives.lines if ln and not ln.startswith("#")}
+    added = []
+    for name in unmanaged:
+        if name.lower() not in have:
+            archives.lines.append(name)
+            added.append(name)
+    if added:
+        write_file(archives)
+    return added
+
+
+def remove_archives(env: Env, bsa_names: list[str], plugin_names: list[str]) -> list[str]:
+    unmanaged = {name.lower() for name in bsa_names
+                 if Path(name).stem.lower() not in plugin_stems(plugin_names)}
+    if not unmanaged or not env.archives.is_file():
+        return []
+    archives = read_file(env.archives)
+    removed = [ln.strip() for ln in archives.lines if ln.strip().lower() in unmanaged]
+    if removed:
+        archives.lines = [ln for ln in archives.lines if ln.strip().lower() not in unmanaged]
+        write_file(archives)
+    return removed
+
+
+# ---------------------------------------------------------------------------
+# Archive + FOMOD resolution
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FileInstall:
+    source: str
+    target: str
+
+
+@dataclass
+class FomodPlugin:
+    step: str
+    group: str
+    name: str
+    type_name: str
+    description: str
+    files: list[FileInstall]
+
+    @property
+    def choice_id(self) -> str:
+        return f"{self.step}/{self.group}/{self.name}"
+
+
+@dataclass
+class FomodGroup:
+    step: str
+    name: str
+    select_type: str
+    plugins: list[FomodPlugin]
+
+
+@dataclass
+class FomodPlan:
+    name: str | None
+    version: str | None
+    required_files: list[FileInstall]
+    groups: list[FomodGroup]
+    unsupported: list[str]
+
+    def default_choices(self) -> dict:
+        selected: dict[str, dict[str, list[str]]] = {}
+        handoff: list[str] = list(self.unsupported)
+        for group in self.groups:
+            picks = default_group_picks(group)
+            if picks is None:
+                handoff.append(
+                    f"{group.step}/{group.name}: no deterministic default for {group.select_type}"
+                )
+                picks = []
+            selected.setdefault(group.step, {})[group.name] = picks
+        status = "handoff_user" if handoff else "ready"
+        return {
+            "format": FOMOD_CHOICES_FORMAT,
+            "status": status,
+            "mod_name": self.name,
+            "version": self.version,
+            "selected": selected,
+            "handoff_reasons": handoff,
+        }
+
+    def summary(self) -> dict:
+        return {
+            "name": self.name,
+            "version": self.version,
+            "required_files": [fi.__dict__ for fi in self.required_files],
+            "groups": [
+                {
+                    "step": group.step,
+                    "name": group.name,
+                    "select_type": group.select_type,
+                    "plugins": [
+                        {
+                            "name": plugin.name,
+                            "type": plugin.type_name,
+                            "description": plugin.description,
+                            "files": [fi.__dict__ for fi in plugin.files],
+                            "choice_id": plugin.choice_id,
+                        }
+                        for plugin in group.plugins
+                    ],
+                }
+                for group in self.groups
+            ],
+            "unsupported": self.unsupported,
+            "default_choices": self.default_choices(),
+        }
+
+
+@dataclass
+class ResolvedSource:
+    source_dir: Path | None
+    loose_files: list[Path]
+    name: str
+    version: str | None = None
+    warnings: list[str] | None = None
+    fomod: FomodPlan | None = None
+    fomod_choices: dict | None = None
+    cleanup: Path | None = None
+
+
+def local_name(elem: ET.Element) -> str:
+    return elem.tag.rsplit("}", 1)[-1]
+
+
+def child_text(elem: ET.Element, name: str) -> str | None:
+    for child in elem:
+        if local_name(child) == name and child.text:
+            return child.text.strip()
+    return None
+
+
+def first_child(elem: ET.Element, name: str) -> ET.Element | None:
+    for child in elem:
+        if local_name(child) == name:
+            return child
+    return None
+
+
+def all_children(elem: ET.Element, name: str) -> list[ET.Element]:
+    return [child for child in elem if local_name(child) == name]
+
+
+def safe_rel(raw: str) -> Path:
+    raw = raw.replace("\\", "/")
+    if raw.startswith("/") or (len(raw) > 1 and raw[1] == ":"):
+        raise Fail(f"unsafe archive path: {raw!r}")
+    raw = raw.strip("/")
+    path = Path(raw)
+    if not raw or path.is_absolute() or ".." in path.parts:
+        raise Fail(f"unsafe archive path: {raw!r}")
+    return path
+
+
+def extract_zip(src: Path, dest: Path) -> None:
+    try:
+        with zipfile.ZipFile(src) as zf:
+            for info in zf.infolist():
+                if not info.filename or info.filename.endswith("/"):
+                    continue
+                rel = safe_rel(info.filename)
+                out = dest / rel
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(info) as reader, out.open("wb") as writer:
+                    shutil.copyfileobj(reader, writer)
+    except zipfile.BadZipFile as exc:
+        raise Fail(f"bad zip archive: {src}") from exc
+
+
+def unpack_archive(src: Path, work: Path) -> Path:
+    suffix = src.suffix.lower()
+    if suffix == ".zip":
+        root = work / "archive"
+        root.mkdir()
+        extract_zip(src, root)
+        return root
+    if suffix in (".7z", ".rar"):
+        tool = shutil.which("7z") or shutil.which("unar")
+        if not tool:
+            raise Fail(
+                f"handoff_user: {src.name} is {suffix}; install 7z/unar or unpack it manually first"
+            )
+        root = work / "archive"
+        root.mkdir()
+        if Path(tool).name == "unar":
+            cmd = [tool, "-quiet", "-force-overwrite", "-output-directory", str(root), str(src)]
+        else:
+            cmd = [tool, "x", f"-o{root}", "-y", str(src)]
+        proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if proc.returncode != 0:
+            raise Fail(f"handoff_user: {src.name} could not be unpacked by {Path(tool).name}: {proc.stdout.strip()}")
+        return root
+    raise Fail(f"source file is not a plugin or supported archive: {src.name}")
+
+
+def find_case_insensitive(root: Path, rel: str) -> Path | None:
+    current = root
+    for part in safe_rel(rel).parts:
+        try:
+            matches = [p for p in current.iterdir() if p.name.lower() == part.lower()]
+        except FileNotFoundError:
+            return None
+        if not matches:
+            return None
+        current = matches[0]
+    return current
+
+
+def candidate_mod_roots(root: Path) -> list[Path]:
+    candidates = []
+    for path in [root, *(p for p in root.rglob("*") if p.is_dir())]:
+        if looks_like_mod_root(path) or find_case_insensitive(path, "fomod/ModuleConfig.xml"):
+            candidates.append(path)
+    candidates.sort(key=lambda p: (len(p.relative_to(root).parts), str(p).lower()))
+    return candidates
+
+
+def choose_mod_root(root: Path) -> Path:
+    children = [p for p in root.iterdir() if not p.name.startswith(".")]
+    if (len(children) == 1 and children[0].is_dir()
+            and children[0].name.lower() not in {"data", "fomod"}):
+        root = children[0]
+    if find_case_insensitive(root, "fomod/ModuleConfig.xml"):
+        return root
+    data = find_case_insensitive(root, "Data")
+    if data and looks_like_mod_root(data):
+        return data
+    candidates = candidate_mod_roots(root)
+    if not candidates:
+        return root
+    return candidates[0]
+
+
+def file_installs(parent: ET.Element) -> list[FileInstall]:
+    installs: list[FileInstall] = []
+    for elem in parent.iter():
+        tag = local_name(elem)
+        if tag not in {"file", "folder"}:
+            continue
+        source = elem.get("source")
+        if not source:
+            continue
+        target = elem.get("destination") or elem.get("target") or ""
+        installs.append(FileInstall(str(safe_rel(source)), str(safe_rel(target)) if target else ""))
+    return installs
+
+
+def plugin_type(plugin: ET.Element, unsupported: list[str], label: str) -> str:
+    descriptor = first_child(plugin, "typeDescriptor")
+    if descriptor is None:
+        return "Optional"
+    dependency = first_child(descriptor, "dependencyType")
+    if dependency is not None:
+        unsupported.append(f"{label}: dependencyType requires runtime condition evaluation")
+        return "Conditional"
+    type_elem = first_child(descriptor, "type")
+    return type_elem.get("name", "Optional") if type_elem is not None else "Optional"
+
+
+def parse_info_xml(root: Path) -> tuple[str | None, str | None]:
+    info = find_case_insensitive(root, "fomod/info.xml")
+    if not info:
+        return None, None
+    try:
+        doc = ET.parse(info).getroot()
+    except ET.ParseError as exc:
+        raise Fail(f"handoff_user: cannot parse fomod/info.xml: {exc}") from exc
+    return child_text(doc, "Name"), child_text(doc, "Version")
+
+
+def parse_fomod(root: Path) -> FomodPlan | None:
+    config = find_case_insensitive(root, "fomod/ModuleConfig.xml")
+    if not config:
+        return None
+    try:
+        doc = ET.parse(config).getroot()
+    except ET.ParseError as exc:
+        raise Fail(f"handoff_user: cannot parse fomod/ModuleConfig.xml: {exc}") from exc
+
+    name, version = parse_info_xml(root)
+    name = name or doc.get("moduleName") or child_text(doc, "moduleName")
+    unsupported: list[str] = []
+
+    required_files: list[FileInstall] = []
+    install_steps = first_child(doc, "installSteps")
+    required = first_child(doc, "requiredInstallFiles")
+    if required is not None:
+        required_files.extend(file_installs(required))
+
+    conditional = first_child(doc, "conditionalFileInstalls")
+    if conditional is not None and list(conditional):
+        unsupported.append("conditionalFileInstalls requires runtime flag evaluation")
+
+    groups: list[FomodGroup] = []
+    if install_steps is not None:
+        for step in all_children(install_steps, "installStep"):
+            step_name = step.get("name") or "Install"
+            visible = first_child(step, "visible")
+            if visible is not None and list(visible):
+                unsupported.append(f"{step_name}: visible conditions are not supported")
+            optional_file_groups = first_child(step, "optionalFileGroups")
+            if optional_file_groups is None:
+                continue
+            for group in all_children(optional_file_groups, "group"):
+                group_name = group.get("name") or "Options"
+                select_type = group.get("type") or "SelectAny"
+                plugins_elem = first_child(group, "plugins")
+                plugins: list[FomodPlugin] = []
+                if plugins_elem is not None:
+                    for plugin in all_children(plugins_elem, "plugin"):
+                        plugin_name = plugin.get("name") or "Option"
+                        label = f"{step_name}/{group_name}/{plugin_name}"
+                        files_elem = first_child(plugin, "files")
+                        plugins.append(FomodPlugin(
+                            step=step_name,
+                            group=group_name,
+                            name=plugin_name,
+                            type_name=plugin_type(plugin, unsupported, label),
+                            description=child_text(plugin, "description") or "",
+                            files=file_installs(files_elem) if files_elem is not None else [],
+                        ))
+                groups.append(FomodGroup(step=step_name, name=group_name,
+                                         select_type=select_type, plugins=plugins))
+
+    return FomodPlan(name=name, version=version, required_files=required_files,
+                     groups=groups, unsupported=unsupported)
+
+
+def default_group_picks(group: FomodGroup) -> list[str] | None:
+    required = [p.name for p in group.plugins if p.type_name.lower() == "required"]
+    recommended = [p.name for p in group.plugins if p.type_name.lower() == "recommended"]
+    selected = required + recommended
+    if group.select_type == "SelectAny":
+        return selected
+    if group.select_type == "SelectAtLeastOne":
+        return selected if selected else None
+    if group.select_type == "SelectExactlyOne":
+        if len(required) == 1:
+            return required
+        if not required and len(recommended) == 1:
+            return recommended
+        return None
+    if group.select_type == "SelectAtMostOne":
+        if len(selected) <= 1:
+            return selected
+        return None
+    return None
+
+
+def load_fomod_choices(path: Path) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("format") != FOMOD_CHOICES_FORMAT:
+        raise Fail(f"{path} is not a {FOMOD_CHOICES_FORMAT} file")
+    if data.get("status") == "handoff_user":
+        reasons = "; ".join(data.get("handoff_reasons") or ["manual choices required"])
+        raise Fail(f"handoff_user: choices file is not replayable: {reasons}")
+    return data
+
+
+def selected_plugin_names(choices: dict, step: str, group: str) -> set[str]:
+    selected = choices.get("selected", {})
+    return set(selected.get(step, {}).get(group, []))
+
+
+def copy_install(root: Path, install: FileInstall, dest: Path) -> None:
+    src = root / safe_rel(install.source)
+    if not src.exists():
+        raise Fail(f"handoff_user: FOMOD references missing source: {install.source}")
+    if src.is_dir():
+        out = dest / safe_rel(install.target) if install.target else dest
+        if out.exists() and not out.is_dir():
+            raise Fail(f"cannot merge folder over file: {install.target}")
+        shutil.copytree(src, out, dirs_exist_ok=True)
+    else:
+        target_rel = safe_rel(install.target) if install.target else Path(src.name)
+        out = dest / target_rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, out)
+
+
+def materialize_fomod(root: Path, plan: FomodPlan, choices: dict, dest: Path) -> None:
+    if plan.unsupported:
+        raise Fail(f"handoff_user: unsupported FOMOD features: {'; '.join(plan.unsupported)}")
+    dest.mkdir(parents=True)
+    for install in plan.required_files:
+        copy_install(root, install, dest)
+    known = {(group.step, group.name, plugin.name)
+             for group in plan.groups for plugin in group.plugins}
+    requested = []
+    for step, groups in choices.get("selected", {}).items():
+        for group, plugins in groups.items():
+            for plugin in plugins:
+                requested.append((step, group, plugin))
+    unknown = ["/".join(item) for item in requested if item not in known]
+    if unknown:
+        raise Fail(f"choices reference unknown FOMOD plugin(s): {', '.join(unknown)}")
+    for group in plan.groups:
+        selected = selected_plugin_names(choices, group.step, group.name)
+        for plugin in group.plugins:
+            if plugin.name in selected:
+                for install in plugin.files:
+                    copy_install(root, install, dest)
+
+
+def inspect_source(src: Path) -> dict:
+    src = src.expanduser().resolve()
+    if not src.exists():
+        raise Fail(f"source not found: {src}")
+    with tempfile.TemporaryDirectory(prefix="mo2ctl-inspect-") as tmp:
+        root = Path(tmp)
+        source_root = unpack_archive(src, root) if src.is_file() and src.suffix.lower() in ARCHIVE_SUFFIXES else src
+        mod_root = choose_mod_root(source_root) if source_root.is_dir() else source_root
+        fomod = parse_fomod(mod_root) if mod_root.is_dir() else None
+        return {
+            "source": str(src),
+            "source_type": src.suffix.lower().lstrip(".") if src.is_file() else "directory",
+            "mod_root": str(mod_root),
+            "looks_like_mod_root": mod_root.is_dir() and looks_like_mod_root(mod_root),
+            "has_fomod": fomod is not None,
+            "fomod": fomod.summary() if fomod else None,
+        }
+
+
+def resolve_source(src: Path, name: str | None, choices_path: Path | None = None) -> ResolvedSource:
+    """Work out what to copy and what to call it.
+
+    A bare .esp is accepted as a source, because that is exactly what ModForge
+    writes into `out/`. Archives are unpacked into a temporary staging directory
+    and then resolved to either a Data-level root or a materialized FOMOD result.
+    """
+    src = src.expanduser().resolve()
+    if not src.exists():
+        raise Fail(f"source not found: {src}")
+
+    if src.is_file() and src.suffix.lower() in PLUGIN_SUFFIXES:
+        return ResolvedSource(None, [src], name or src.stem)
+
+    warnings: list[str] = []
+    if src.is_file():
+        work = Path(tempfile.mkdtemp(prefix="mo2ctl-install-"))
+        source_root = unpack_archive(src, work)
+        base_name = src.stem
+    else:
+        work = None
+        source_root = src
+        base_name = src.name
+
+    mod_root = choose_mod_root(source_root)
+    fomod = parse_fomod(mod_root)
+    if fomod:
+        if choices_path is None:
+            choices = fomod.default_choices()
+            if choices.get("status") == "handoff_user":
+                reasons = "; ".join(choices.get("handoff_reasons") or [])
+                raise Fail(f"handoff_user: FOMOD choices required for {src.name}: {reasons}")
+        else:
+            choices = load_fomod_choices(choices_path.expanduser())
+        material_work = work or Path(tempfile.mkdtemp(prefix="mo2ctl-fomod-"))
+        staging = material_work / "materialized"
+        materialize_fomod(mod_root, fomod, choices, staging)
+        if not any(staging.iterdir()):
+            raise Fail("handoff_user: FOMOD choices materialized an empty mod")
+        return ResolvedSource(staging, [], name or fomod.name or base_name,
+                              fomod.version, warnings, fomod, choices, material_work)
+
+    children = [p for p in mod_root.iterdir() if not p.name.startswith(".")]
+    if len(children) == 1 and children[0].is_dir() and children[0].name.lower() == "data":
+        return ResolvedSource(children[0], [], name or base_name, warnings=warnings, cleanup=work)
+
+    return ResolvedSource(mod_root, [], name or base_name, warnings=warnings, cleanup=work)
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -387,28 +919,18 @@ def cmd_status(env: Env, args) -> dict:
     return info
 
 
-def resolve_source(src: Path, name: str | None) -> tuple[Path | None, list[Path], str]:
-    """Work out what to copy and what to call it.
-
-    Returns (source_dir_or_None, loose_files, mod_name). A bare .esp is accepted
-    as a source, because that is exactly what ModForge writes into `out/`.
-    """
-    src = src.expanduser().resolve()
-    if not src.exists():
-        raise Fail(f"source not found: {src}")
-
-    if src.is_file():
-        if src.suffix.lower() not in PLUGIN_SUFFIXES:
-            raise Fail(f"source file is not a plugin: {src.name}")
-        return None, [src], name or src.stem
-
-    # A folder holding nothing but `Data/` is the shape a lot of archives unpack
-    # into; MO2 wants the contents of Data, not Data itself.
-    children = [p for p in src.iterdir() if not p.name.startswith(".")]
-    if len(children) == 1 and children[0].is_dir() and children[0].name.lower() == "data":
-        return children[0], [], name or src.name
-
-    return src, [], name or src.name
+def cmd_inspect(env: Env, args) -> dict:
+    result = inspect_source(Path(args.source))
+    if args.write_choices:
+        fomod = result.get("fomod")
+        if not fomod:
+            raise Fail("source has no FOMOD choices to write")
+        out = Path(args.write_choices).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(fomod["default_choices"], indent=1, ensure_ascii=False) + "\n",
+                       encoding="utf-8")
+        result["choices_written"] = str(out)
+    return result
 
 
 def looks_like_mod_root(path: Path) -> bool:
@@ -423,49 +945,64 @@ def looks_like_mod_root(path: Path) -> bool:
 def cmd_install(env: Env, args) -> dict:
     require_writable(args)
 
-    src_dir, loose, name = resolve_source(Path(args.source), args.name)
+    resolved = resolve_source(
+        Path(args.source),
+        args.name,
+        Path(args.fomod_choices) if args.fomod_choices else None,
+    )
+    src_dir, loose, name = resolved.source_dir, resolved.loose_files, resolved.name
     dest = env.mods / name
 
-    if dest.exists():
-        if not args.force:
-            raise Fail(f"mod folder already exists: {dest} (use --force to replace)")
-        shutil.rmtree(dest)
+    try:
+        if dest.exists():
+            if not args.force:
+                raise Fail(f"mod folder already exists: {dest} (use --force to replace)")
+            shutil.rmtree(dest)
 
-    warnings = []
-    if src_dir is not None and not looks_like_mod_root(src_dir):
-        warnings.append(
-            f"{src_dir} has no recognisable Data-level content (no plugin, bsa, or "
-            f"known subdirectory) — MO2 will mount it but the game may see nothing"
-        )
+        warnings = list(resolved.warnings or [])
+        if src_dir is not None and not looks_like_mod_root(src_dir):
+            warnings.append(
+                f"{src_dir} has no recognisable Data-level content (no plugin, bsa, or "
+                f"known subdirectory) — MO2 will mount it but the game may see nothing"
+            )
 
-    if src_dir is not None:
-        shutil.copytree(src_dir, dest)
-    else:
-        dest.mkdir(parents=True)
-        for f in loose:
-            shutil.copy2(f, dest / f.name)
+        if src_dir is not None:
+            shutil.copytree(src_dir, dest)
+        else:
+            dest.mkdir(parents=True)
+            for f in loose:
+                shutil.copy2(f, dest / f.name)
+        if resolved.fomod_choices:
+            (dest / "mo2ctl-fomod-choices.json").write_text(
+                json.dumps(resolved.fomod_choices, indent=1, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
 
-    write_meta_ini(dest, args.version, args.comment)
+        write_meta_ini(dest, resolved.version or args.version, args.comment)
 
-    tf = read_file(env.modlist)
-    idx = modlist_index(tf, name)
-    prefix = "+" if not args.no_enable else "-"
-    if idx is None:
-        # Line 0 is MO2's header comment; line 1 is top priority.
-        tf.lines.insert(1, prefix + name)
-    else:
-        tf.lines[idx] = prefix + name
-    write_file(tf)
+        tf = read_file(env.modlist)
+        priority = place_mod(tf, name, not args.no_enable, args.priority)
+        write_file(tf)
 
-    plugins = plugin_files(dest)
-    activated = add_plugins(env, plugins) if not args.no_enable else []
+        plugins = plugin_files(dest)
+        activated = add_plugins(env, plugins) if not args.no_enable else []
+        archives = bsa_files(dest)
+        archives_added = add_archives(env, archives, plugins) if not args.no_enable else []
+    finally:
+        if resolved.cleanup:
+            shutil.rmtree(resolved.cleanup, ignore_errors=True)
 
     return {
         "installed": name,
         "path": str(dest),
         "enabled": not args.no_enable,
+        "priority": priority,
         "plugins_found": plugins,
         "plugins_activated": activated,
+        "archives_found": archives,
+        "archives_added": archives_added,
+        "fomod": bool(resolved.fomod),
+        "fomod_choices": "mo2ctl-fomod-choices.json" if resolved.fomod_choices else None,
         "warnings": warnings,
     }
 
@@ -488,6 +1025,7 @@ def cmd_uninstall(env: Env, args) -> dict:
     name = args.name
     dest = env.mods / name
     plugins = plugin_files(dest) if dest.is_dir() else []
+    archives = bsa_files(dest) if dest.is_dir() else []
 
     tf = read_file(env.modlist)
     idx = modlist_index(tf, name)
@@ -496,19 +1034,21 @@ def cmd_uninstall(env: Env, args) -> dict:
         write_file(tf)
 
     removed_plugins = remove_plugins(env, plugins)
+    removed_archives = remove_archives(env, archives, plugins)
 
     removed_files = False
     if dest.is_dir() and not args.keep_files:
         shutil.rmtree(dest)
         removed_files = True
 
-    if idx is None and not removed_files and not removed_plugins:
+    if idx is None and not removed_files and not removed_plugins and not removed_archives:
         raise Fail(f"nothing to uninstall: {name} is not in the modlist and has no folder")
 
     return {
         "uninstalled": name,
         "removed_from_modlist": idx is not None,
         "removed_plugins": removed_plugins,
+        "removed_archives": removed_archives,
         "removed_files": removed_files,
     }
 
@@ -629,11 +1169,19 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--mod", help="also report on one mod by name")
     s.set_defaults(func=cmd_status)
 
-    s = sub_add("install", "copy a mod folder (or a bare .esp) into MO2 and enable it")
-    s.add_argument("source", help="mod folder, a folder containing Data/, or a single plugin file")
+    s = sub_add("inspect", "inspect an archive or folder and emit replayable FOMOD choices")
+    s.add_argument("source", help="mod archive or folder")
+    s.add_argument("--write-choices", help="write default FOMOD choices JSON to this path")
+    s.set_defaults(func=cmd_inspect, needs_env=False)
+
+    s = sub_add("install", "copy a mod archive, folder, or bare .esp into MO2 and enable it")
+    s.add_argument("source", help="mod archive, mod folder, a folder containing Data/, or a single plugin file")
     s.add_argument("--name", help="mod folder name in MO2 (default: source basename)")
     s.add_argument("--no-enable", action="store_true", help="install but leave it off")
     s.add_argument("--force", action="store_true", help="replace an existing folder / ignore the running-process lock")
+    s.add_argument("--priority", default="bottom",
+                   help="modlist placement: bottom, top, before:<mod>, or after:<mod> (default: bottom)")
+    s.add_argument("--fomod-choices", help="replay choices JSON written by `mo2ctl inspect --write-choices`")
     s.add_argument("--version", default="0.0.0")
     s.add_argument("--comment", default="Installed by mo2ctl (AI QA loop). TEST HARNESS — safe to remove.")
     s.set_defaults(func=cmd_install)
@@ -685,7 +1233,8 @@ def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     as_json = getattr(args, "json", False)  # SUPPRESS means the attribute may be absent
     try:
-        result = args.func(load_env(), args)
+        env = load_env() if getattr(args, "needs_env", True) else None
+        result = args.func(env, args)
     except Fail as exc:
         if as_json:
             print(json.dumps({"ok": False, "error": str(exc)}, indent=1))
