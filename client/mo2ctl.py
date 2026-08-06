@@ -15,6 +15,7 @@ the rest of the toolchain is mid-rebuild.
   mo2ctl profile-status
   mo2ctl profile-semantics [--ref HEAD]
   mo2ctl profile-absorb-churn
+  mo2ctl static-gates [--plugin PLUGIN] [--baseline before.json] [--report report.json]
   mo2ctl select-profile <profile>
   mo2ctl try-begin <name>
   mo2ctl try-fail [--uninstall MOD]
@@ -34,6 +35,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -57,7 +59,10 @@ ARCHIVE_SUFFIXES = (".zip", ".7z", ".rar")
 BSA_SUFFIXES = (".bsa", ".ba2")
 FOMOD_CHOICES_FORMAT = "mo2ctl-fomod-choices-v1"
 PROFILE_MANIFEST_FORMAT = "mo2ctl-profile-manifest-v1"
+STATIC_GATE_FORMAT = "mo2ctl-static-gates-v1"
 PROFILE_MAIN_BRANCH = "main"
+DEFAULT_HOUSECARL_SERVER = Path.home() / "tools/housecarl/server/housecarl-mcp"
+HOUSECARL_MCP_PROTOCOL = "2025-06-18"
 ENGINE_LOADORDER_CHURN = {
     "ccbgssse068-bloodfall.esl",
     "ccbgssse069-contest.esl",
@@ -462,6 +467,365 @@ def archive_library_status(sha256: str | None) -> str:
         return "unchecked"
     last = proc.stdout.strip().splitlines()[-1:] or [""]
     return "present" if last[0].strip() not in {"", "0"} else "missing"
+
+
+# ---------------------------------------------------------------------------
+# houseCARL static gates
+# ---------------------------------------------------------------------------
+
+
+class HousecarlClient:
+    """Tiny stdio MCP client for the local houseCARL server.
+
+    This keeps `mo2ctl static-gates` runnable as a normal CLI command instead of
+    relying on the chat session's MCP transport. It speaks only the subset needed
+    here: initialize and tools/call.
+    """
+
+    def __init__(self, env: Env, server: Path | None = None):
+        self.env = env
+        self.server = (server or DEFAULT_HOUSECARL_SERVER).expanduser()
+        self.proc: subprocess.Popen | None = None
+        self.next_id = 1
+
+    def __enter__(self):
+        if not self.server.is_file():
+            raise Fail(f"houseCARL server not found: {self.server} (use --housecarl-server)")
+        child_env = os.environ.copy()
+        child_env.setdefault("HOUSECARL_DATA_DIR", str(Path.home() / ".local/share/housecarl"))
+        child_env["HouseCarl__DataDir"] = str(Path.home() / ".local/share/Steam/steamapps/common/Skyrim Special Edition/Data")
+        child_env["HouseCarl__ModsDir"] = str(self.env.mods)
+        child_env["HouseCarl__ProfileDir"] = str(self.env.profile_dir)
+        self.proc = subprocess.Popen(
+            [str(self.server)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=child_env,
+        )
+        self.request("initialize", {
+            "protocolVersion": HOUSECARL_MCP_PROTOCOL,
+            "capabilities": {},
+            "clientInfo": {"name": "mo2ctl", "version": "0"},
+        })
+        self.notify("notifications/initialized", {})
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+    def notify(self, method: str, params: dict) -> None:
+        self._send({"jsonrpc": "2.0", "method": method, "params": params})
+
+    def request(self, method: str, params: dict) -> dict:
+        msg_id = self.next_id
+        self.next_id += 1
+        self._send({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params})
+        assert self.proc is not None and self.proc.stdout is not None
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:
+                stderr = ""
+                if self.proc.stderr:
+                    stderr = self.proc.stderr.read()
+                raise Fail(f"houseCARL server exited before replying: {stderr.strip()}")
+            message = json.loads(line)
+            if message.get("id") != msg_id:
+                continue
+            if "error" in message:
+                raise Fail(f"houseCARL MCP error: {message['error']}")
+            return message.get("result") or {}
+
+    def _send(self, message: dict) -> None:
+        assert self.proc is not None and self.proc.stdin is not None
+        self.proc.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+        self.proc.stdin.flush()
+
+    def call_tool(self, name: str, arguments: dict) -> dict:
+        result = self.request("tools/call", {"name": name, "arguments": arguments})
+        parts = result.get("content") or []
+        text = "\n".join(str(part.get("text", "")) for part in parts if part.get("type") == "text")
+        return {
+            "tool": name,
+            "arguments": arguments,
+            "is_error": bool(result.get("isError")),
+            "text": text,
+        }
+
+
+def load_json_file(path: Path) -> dict:
+    try:
+        return json.loads(path.expanduser().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise Fail(f"cannot read JSON file {path}: {exc}") from exc
+
+
+def write_json_file(path: Path, data: dict) -> None:
+    path = path.expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=1, ensure_ascii=False, sort_keys=True) + "\n",
+                    encoding="utf-8")
+
+
+def static_tool_specs(args) -> list[tuple[str, dict]]:
+    max_chars = args.max_chars
+    plugins = getattr(args, "plugin", None)
+    specs: list[tuple[str, dict]] = [
+        ("housecarl_load_order_status", {"max_chars": max_chars}),
+        ("housecarl_check_errors", {"plugins": plugins or None, "limit": args.limit, "max_chars": max_chars}),
+        ("housecarl_skse_inventory", {"max_chars": max_chars}),
+        ("housecarl_validate_scripts", {"plugins": plugins or None, "limit": args.limit, "max_chars": max_chars}),
+    ]
+    for formid in getattr(args, "dialogue_formid", None) or []:
+        specs.append(("housecarl_validate_dialogue", {"formid": formid, "max_chars": max_chars}))
+    assets = getattr(args, "asset", None)
+    if assets:
+        specs.append(("housecarl_asset_status", {"asset_paths": assets, "max_chars": max_chars}))
+    for mesh in getattr(args, "mesh", None) or []:
+        specs.append(("housecarl_nif_inspect", {"mesh_path": mesh, "sections": getattr(args, "nif_sections", ""), "max_chars": max_chars}))
+    return specs
+
+
+def capture_static_gates(env: Env, args) -> dict:
+    results = []
+    with HousecarlClient(env, Path(args.housecarl_server).expanduser() if args.housecarl_server else None) as hc:
+        for tool, tool_args in static_tool_specs(args):
+            results.append(hc.call_tool(tool, {k: v for k, v in tool_args.items() if v is not None}))
+    return {
+        "format": STATIC_GATE_FORMAT,
+        "captured_at": utc_stamp(),
+        "profile": env.profile,
+        "plugins": args.plugin or [],
+        "mod": args.mod,
+        "tools": results,
+        "crash_logs": crash_triage_from_capture(results, args),
+    }
+
+
+def tool_key(result: dict) -> str:
+    args = result.get("arguments") or {}
+    suffix = ""
+    if "formid" in args:
+        suffix = f":{args['formid']}"
+    if "mesh_path" in args:
+        suffix = f":{args['mesh_path']}"
+    if "asset_paths" in args:
+        suffix = ":" + ",".join(args["asset_paths"])
+    return f"{result.get('tool')}{suffix}"
+
+
+def normalize_load_order_warnings(text: str) -> list[str]:
+    warnings = []
+    for line in text.splitlines():
+        clean = line.strip()
+        if not clean.startswith("- "):
+            continue
+        lowered = clean.lower()
+        if any(cc in lowered for cc in ENGINE_LOADORDER_CHURN):
+            continue
+        if "warning" in lowered or "load order lists" in lowered or "missing" in lowered:
+            warnings.append(clean)
+    return warnings
+
+
+def skse_diagnostics(text: str) -> list[str]:
+    diagnostics = []
+    for line in text.splitlines():
+        lowered = line.lower()
+        if "contested" in lowered or "version-locked" in lowered or "locked to" in lowered:
+            diagnostics.append(line.strip())
+    return sorted(set(diagnostics))
+
+
+def regex_count(pattern: str, text: str) -> int | None:
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def classify_static_result(current: dict, baseline: dict | None = None) -> dict:
+    tool = current.get("tool", "")
+    text = current.get("text", "")
+    base_text = (baseline or {}).get("text", "")
+    status = "pass"
+    findings: list[str] = []
+
+    if current.get("is_error"):
+        return {"status": "fail", "findings": ["houseCARL tool returned isError"]}
+
+    if tool == "housecarl_load_order_status":
+        warnings = normalize_load_order_warnings(text)
+        base_warnings = normalize_load_order_warnings(base_text) if baseline else []
+        new = [w for w in warnings if w not in base_warnings]
+        if new:
+            status = "fail"
+            findings.extend(new)
+    elif tool == "housecarl_check_errors":
+        missing = regex_count(r"(\d+)\s+missing master", text)
+        base_missing = regex_count(r"(\d+)\s+missing master", base_text) if baseline else 0
+        if missing is not None and missing > (base_missing or 0):
+            status = "fail"
+            findings.append(f"missing masters increased: {base_missing or 0} -> {missing}")
+        elif baseline and text != base_text:
+            status = "warn"
+            findings.append("check_errors output differs from baseline; review raw report")
+        elif not baseline and missing:
+            status = "fail"
+            findings.append(f"missing masters: {missing}")
+    elif tool == "housecarl_skse_inventory":
+        diagnostics = skse_diagnostics(text)
+        base_diagnostics = skse_diagnostics(base_text) if baseline else []
+        if not baseline:
+            if diagnostics:
+                status = "warn"
+                findings.append("SKSE diagnostics present; use a baseline to distinguish existing contested/locked DLLs")
+        else:
+            new = [d for d in diagnostics if d not in base_diagnostics]
+            if new:
+                status = "fail"
+                findings.extend(new)
+    else:
+        lowered = text.lower()
+        bad_markers = ["[error]", "missing master", "dangling", "unbound", "unverifiable", "absent", "could not", "failed"]
+        if any(marker in lowered for marker in bad_markers):
+            if baseline and text == base_text:
+                status = "pass"
+            else:
+                scoped_plugins = bool((current.get("arguments") or {}).get("plugins"))
+                status = "fail" if scoped_plugins or baseline else "warn"
+                findings.append("static validator reported errors or unresolved assets")
+
+    return {"status": status, "findings": findings}
+
+
+def evaluate_static_gates(capture: dict, baseline: dict | None = None) -> dict:
+    if capture.get("format") != STATIC_GATE_FORMAT:
+        raise Fail("not a mo2ctl static-gates capture")
+    baseline_by_key = {tool_key(item): item for item in (baseline or {}).get("tools", [])}
+    gate_results = []
+    status_rank = {"pass": 0, "warn": 1, "fail": 2}
+    overall = "pass"
+    for result in capture.get("tools", []):
+        key = tool_key(result)
+        classified = classify_static_result(result, baseline_by_key.get(key))
+        gate_results.append({"key": key, **classified})
+        if status_rank[classified["status"]] > status_rank[overall]:
+            overall = classified["status"]
+
+    crash = capture.get("crash_logs") or {}
+    if crash.get("new_logs"):
+        overall = "fail"
+        gate_results.append({
+            "key": "crash_logs",
+            "status": "fail",
+            "findings": [f"{len(crash['new_logs'])} crash log(s) matched triage window"],
+        })
+
+    return {
+        "status": overall,
+        "gates": gate_results,
+    }
+
+
+def parse_crash_time(path: Path) -> datetime | None:
+    match = re.match(r"crash-(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})\.log$", path.name)
+    if not match:
+        return None
+    return datetime(*map(int, match.groups()), tzinfo=UTC)
+
+
+def parse_uptime_ms(text: str) -> int | None:
+    patterns = [
+        r"uptime[: ]+([0-9,]+)\s*ms",
+        r"uptime[: ]+([0-9,]+)\s*milliseconds",
+        r"Uptime\s*:\s*([0-9,]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1).replace(",", ""))
+    return None
+
+
+def uptime_bin(ms: int | None) -> str:
+    if ms is None:
+        return "unknown"
+    if ms <= 8000:
+        return "load/plugin-conflict window"
+    if ms <= 90000:
+        return "entry/initialization window"
+    return "content/playtime window"
+
+
+def summarize_crash_log(path: Path, mod: str | None) -> dict:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    modules = []
+    for match in re.finditer(r"([A-Za-z0-9_ .'-]+\.(?:dll|exe))\+([0-9A-Fa-f]+)", text, flags=re.IGNORECASE):
+        module = f"{match.group(1)}+{match.group(2)}"
+        if module not in modules:
+            modules.append(module)
+        if len(modules) == 3:
+            break
+    uptime = parse_uptime_ms(text)
+    has_stack = "call stack" in text.lower()
+    relevant = bool(mod and mod.lower() in text.lower())
+    exception = ""
+    for line in text.splitlines():
+        lowered = line.lower()
+        if "exception" in lowered or "access violation" in lowered:
+            exception = line.strip()
+            break
+    return {
+        "file": str(path),
+        "time": parse_crash_time(path).isoformat() if parse_crash_time(path) else None,
+        "has_call_stack": has_stack,
+        "top_modules": modules,
+        "mentions_mod": relevant,
+        "exception": exception,
+        "uptime_ms": uptime,
+        "uptime_bin": uptime_bin(uptime),
+        "attribution": "candidate" if relevant or any(mod and mod.lower() in m.lower() for m in modules)
+                       else "unable_to_attribute" if not has_stack else "not_matched_to_mod",
+    }
+
+
+def crash_log_dir_from_status(text: str) -> Path | None:
+    match = re.search(r"crash_logs:\s+(.+?)\s+\(", text)
+    if not match:
+        return None
+    return Path(match.group(1)).expanduser()
+
+
+def crash_triage_from_capture(results: list[dict], args) -> dict:
+    if not args.crash_since:
+        return {"checked": False, "reason": "no --crash-since provided"}
+    status_text = next((r.get("text", "") for r in results if r.get("tool") == "housecarl_load_order_status"), "")
+    folder = crash_log_dir_from_status(status_text)
+    if not folder or not folder.is_dir():
+        return {"checked": False, "reason": "crash log folder not configured or missing"}
+    try:
+        since = datetime.fromisoformat(args.crash_since.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise Fail(f"--crash-since must be ISO datetime, got {args.crash_since!r}") from exc
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+
+    chosen = []
+    last_time: datetime | None = None
+    for path in sorted(folder.glob("crash-*.log")):
+        when = parse_crash_time(path)
+        if not when or when < since:
+            continue
+        if last_time and abs((when - last_time).total_seconds()) <= 1:
+            continue
+        chosen.append(summarize_crash_log(path, args.mod))
+        last_time = when
+    return {"checked": True, "folder": str(folder), "since": since.isoformat(), "new_logs": chosen}
 
 
 BACKUP_DIR_NAME = ".mo2ctl-backups"
@@ -1389,6 +1753,34 @@ def cmd_profile_absorb_churn(env: Env, args) -> dict:
     return absorb_engine_churn(env, args.message, force=args.force)
 
 
+def cmd_static_gates(env: Env, args) -> dict:
+    baseline = load_json_file(Path(args.baseline)) if args.baseline else None
+    capture = capture_static_gates(env, args)
+    evaluation = evaluate_static_gates(capture, baseline)
+    report = {
+        "format": STATIC_GATE_FORMAT,
+        "generated_at": utc_stamp(),
+        "profile": env.profile,
+        "baseline": str(Path(args.baseline).expanduser()) if args.baseline else None,
+        "capture": capture,
+        "evaluation": evaluation,
+    }
+    if args.write_baseline:
+        write_json_file(Path(args.write_baseline), capture)
+        report["baseline_written"] = str(Path(args.write_baseline).expanduser())
+    if args.report:
+        write_json_file(Path(args.report), report)
+        report["report_written"] = str(Path(args.report).expanduser())
+    return {
+        "status": evaluation["status"],
+        "profile": env.profile,
+        "gates": evaluation["gates"],
+        "crash_logs": capture.get("crash_logs"),
+        "baseline_written": report.get("baseline_written"),
+        "report_written": report.get("report_written"),
+    }
+
+
 def cmd_select_profile(env: Env, args) -> dict:
     require_writable(args)
     target = args.profile
@@ -1662,6 +2054,26 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-m", "--message", help="profile repo commit message")
     s.add_argument("--force", action="store_true", help="commit despite semantic or path differences")
     s.set_defaults(func=cmd_profile_absorb_churn)
+
+    s = sub_add("static-gates", "run houseCARL static gates and emit a pass/warn/fail report")
+    s.add_argument("--mod", help="mod folder/name under test; used for lookup and crash attribution")
+    s.add_argument("--plugin", action="append",
+                   help="plugin filename under test; repeat for small batches. Omit to sweep whole order.")
+    s.add_argument("--dialogue-formid", action="append",
+                   help="DIAL/QUST/DLVW/DLBR FormID to validate with housecarl_validate_dialogue")
+    s.add_argument("--asset", action="append",
+                   help="Data-relative asset path to resolve with housecarl_asset_status")
+    s.add_argument("--mesh", action="append",
+                   help="Data-relative mesh path to inspect with housecarl_nif_inspect")
+    s.add_argument("--nif-sections", default="", help="nif inspect sections: shapes, paths, all, etc.")
+    s.add_argument("--baseline", help="previous static-gates capture JSON to compare against")
+    s.add_argument("--write-baseline", help="write the raw capture JSON here for before/after comparison")
+    s.add_argument("--report", help="write full report JSON here")
+    s.add_argument("--housecarl-server", help=f"houseCARL MCP server path (default: {DEFAULT_HOUSECARL_SERVER})")
+    s.add_argument("--limit", type=int, default=100, help="finding cap passed to houseCARL validators")
+    s.add_argument("--max-chars", type=int, default=80000, help="max chars per houseCARL tool response")
+    s.add_argument("--crash-since", help="ISO timestamp; triage crash-*.log files from this time onward")
+    s.set_defaults(func=cmd_static_gates)
 
     s = sub_add("select-profile", "switch ModOrganizer.ini selected_profile while preserving line endings")
     s.add_argument("profile")

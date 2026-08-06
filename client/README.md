@@ -26,6 +26,7 @@ anything is a harness you stop using.
 ./mo2ctl.py profile-status
 ./mo2ctl.py profile-semantics [--ref HEAD]
 ./mo2ctl.py profile-absorb-churn
+./mo2ctl.py static-gates --plugin NewMod.esp --baseline before.json --report after.json
 ./mo2ctl.py select-profile QA|Default
 ./mo2ctl.py try-begin "Mod Name"
 ./mo2ctl.py try-fail
@@ -78,6 +79,23 @@ The current known churn is: Skyrim may write
 three loadorder entries, then compares enabled mod set, mod order, active plugin set,
 plugin relative order, and `archives.txt` entries. `try-begin` first absorbs clean
 engine churn into a profile repo commit, then opens `try/<mod>`.
+
+`static-gates` runs houseCARL's offline validators through the local stdio MCP server
+(`~/tools/housecarl/server/housecarl-mcp` by default) and reports `pass`, `warn`, or
+`fail` without launching the game. It captures load-order status, check-errors, SKSE
+inventory, and script validation; optional arguments add dialogue FormIDs, asset paths,
+and NIF inspection. Use a before/after baseline around a `try/<mod>` branch:
+
+```bash
+./mo2ctl.py static-gates --write-baseline /tmp/before.json --json
+./mo2ctl.py static-gates --plugin NewMod.esp --baseline /tmp/before.json --report /tmp/newmod-static.json --json
+```
+
+The comparison is deliberately semantic. The three game-written CC loadorder warnings are
+ignored, existing whole-order findings are warnings unless they get worse, and SKSE DLL
+diagnostics become red only when a baseline comparison shows new contested or
+version-locked entries. Scoped `--plugin` validators are stricter because they describe
+the mod under test directly.
 
 ### Verified end-to-end
 

@@ -367,5 +367,85 @@ class Mo2CtlProfileGitTests(unittest.TestCase):
         self.assertEqual(raw.count(b"selected_profile="), 1)
 
 
+class Mo2CtlStaticGateTests(unittest.TestCase):
+    def result(self, tool: str, text: str, **arguments) -> dict:
+        return {"tool": tool, "arguments": arguments, "is_error": False, "text": text}
+
+    def capture(self, *tools: dict) -> dict:
+        return {
+            "format": mo2ctl.STATIC_GATE_FORMAT,
+            "profile": "QA",
+            "tools": list(tools),
+            "crash_logs": {"checked": False},
+        }
+
+    def test_load_order_gate_ignores_known_cc_churn_warnings(self) -> None:
+        capture = self.capture(self.result(
+            "housecarl_load_order_status",
+            "warnings (3):\n"
+            "  - load order lists 'ccbgssse068-bloodfall.esl' but no enabled mod provides it.\n"
+            "  - load order lists 'ccbgssse069-contest.esl' but no enabled mod provides it.\n"
+            "  - load order lists 'ccvsvsse004-beafarmer.esl' but no enabled mod provides it.\n",
+        ))
+
+        evaluated = mo2ctl.evaluate_static_gates(capture)
+
+        self.assertEqual(evaluated["status"], "pass")
+
+    def test_skse_gate_fails_only_on_new_diagnostics_against_baseline(self) -> None:
+        base = self.capture(self.result(
+            "housecarl_skse_inventory",
+            "contested DLL: BehaviorDataInjector.dll\n",
+        ))
+        current = self.capture(self.result(
+            "housecarl_skse_inventory",
+            "contested DLL: BehaviorDataInjector.dll\n"
+            "contested DLL: PapyrusUtil.dll\n",
+        ))
+
+        evaluated = mo2ctl.evaluate_static_gates(current, base)
+
+        self.assertEqual(evaluated["status"], "fail")
+        self.assertIn("PapyrusUtil.dll", evaluated["gates"][0]["findings"][0])
+
+    def test_check_errors_missing_master_increase_fails(self) -> None:
+        base = self.capture(self.result(
+            "housecarl_check_errors",
+            "scanned 1 plugins · 0 dangling ref(s) · 0 missing master(s)\n",
+        ))
+        current = self.capture(self.result(
+            "housecarl_check_errors",
+            "scanned 1 plugins · 0 dangling ref(s) · 1 missing master(s)\n",
+        ))
+
+        evaluated = mo2ctl.evaluate_static_gates(current, base)
+
+        self.assertEqual(evaluated["status"], "fail")
+        self.assertEqual(evaluated["gates"][0]["findings"], ["missing masters increased: 0 -> 1"])
+
+    def test_crash_logs_dedupe_one_second_and_mark_missing_stack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            first = folder / "crash-2026-08-06-10-00-00.log"
+            duplicate = folder / "crash-2026-08-06-10-00-01.log"
+            later = folder / "crash-2026-08-06-10-02-00.log"
+            first.write_text("Unhandled exception\nUptime: 6599\nAgentBridge.dll+0054404\n", encoding="utf-8")
+            duplicate.write_text("partial handler crash\n", encoding="utf-8")
+            later.write_text("CALL STACK\nSkyrimSE.exe+02C3957\n", encoding="utf-8")
+            args = argparse.Namespace(crash_since="2026-08-06T09:59:00Z", mod="AgentBridge")
+            status = self.result(
+                "housecarl_load_order_status",
+                f"crash_logs: {folder}  (configured)\n",
+            )
+
+            result = mo2ctl.crash_triage_from_capture([status], args)
+
+            self.assertTrue(result["checked"])
+            self.assertEqual(len(result["new_logs"]), 2)
+            self.assertFalse(result["new_logs"][0]["has_call_stack"])
+            self.assertEqual(result["new_logs"][0]["uptime_bin"], "load/plugin-conflict window")
+            self.assertEqual(result["new_logs"][0]["attribution"], "candidate")
+
+
 if __name__ == "__main__":
     unittest.main()
