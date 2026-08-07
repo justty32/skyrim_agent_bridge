@@ -648,6 +648,18 @@ def regex_count(pattern: str, text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def validate_scripts_has_findings(text: str) -> bool:
+    lowered = text.lower()
+    counts = [
+        regex_count(r"(\d+)\s+unbound", text),
+        regex_count(r"(\d+)\s+bound-but-null", text),
+        regex_count(r"(\d+)\s+unverifiable", text),
+    ]
+    if any(count is not None for count in counts):
+        return any((count or 0) > 0 for count in counts)
+    return any(marker in lowered for marker in ("[unbound]", "bound-but-null", "unverifiable"))
+
+
 def classify_static_result(current: dict, baseline: dict | None = None) -> dict:
     tool = current.get("tool", "")
     text = current.get("text", "")
@@ -689,6 +701,16 @@ def classify_static_result(current: dict, baseline: dict | None = None) -> dict:
             if new:
                 status = "fail"
                 findings.extend(new)
+    elif tool == "housecarl_validate_scripts":
+        has_findings = validate_scripts_has_findings(text)
+        base_has_findings = validate_scripts_has_findings(base_text) if baseline else False
+        if has_findings and not (baseline and text == base_text):
+            scoped_plugins = bool((current.get("arguments") or {}).get("plugins"))
+            status = "fail" if scoped_plugins or baseline else "warn"
+            if baseline and base_has_findings and text != base_text:
+                findings.append("script validation output differs from baseline; review raw report")
+            else:
+                findings.append("static validator reported script binding findings")
     else:
         lowered = text.lower()
         bad_markers = ["[error]", "missing master", "dangling", "unbound", "unverifiable", "absent", "could not", "failed"]

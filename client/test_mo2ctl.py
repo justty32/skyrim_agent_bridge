@@ -423,6 +423,20 @@ class Mo2CtlStaticGateTests(unittest.TestCase):
         self.assertEqual(evaluated["status"], "fail")
         self.assertEqual(evaluated["gates"][0]["findings"], ["missing masters increased: 0 -> 1"])
 
+    def test_scoped_validate_scripts_zero_counts_passes(self) -> None:
+        current = self.capture(self.result(
+            "housecarl_validate_scripts",
+            "validate_scripts — VMAD script-property binding sweep\n"
+            "scanned 1 plugin · 0 record(s) with scripts · 0 unbound · "
+            "0 bound-but-null · 0 unverifiable\n\n"
+            "No unbound script properties found in the scanned scope.\n",
+            plugins=["BendTimeRings.esp"],
+        ))
+
+        evaluated = mo2ctl.evaluate_static_gates(current)
+
+        self.assertEqual(evaluated["status"], "pass")
+
     def test_crash_logs_dedupe_one_second_and_mark_missing_stack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)

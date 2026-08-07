@@ -1,0 +1,91 @@
+{
+  "name": "bend-time-rings",
+  "description": "P4 third-party mod validation for Bend Time Rings: prove the plugin loads, move to a stable interior, add and equip the Slow Time ring, then hand off visual inspection.",
+  "baseline": "Save3_474D5830_0_507269736F6E6572_Tamriel_000008_20260802003106_1_1",
+  "defaults": {
+    "settle_seconds": 8,
+    "assert_retry_seconds": 30
+  },
+  "steps": [
+    {
+      "type": "kill",
+      "mo2": true,
+      "label": "start from a clean game session"
+    },
+    {
+      "type": "launch",
+      "wait": 240
+    },
+    {
+      "type": "assert_state",
+      "label": "the engine loaded BendTimeRings.esp",
+      "include": [
+        "plugins"
+      ],
+      "expect": {
+        "plugins[*].name": {
+          "eq": "BendTimeRings.esp"
+        }
+      }
+    },
+    {
+      "type": "load_baseline"
+    },
+    {
+      "type": "console",
+      "cmd": "coc WhiterunBanneredMare",
+      "settle": 2
+    },
+    {
+      "type": "assert_state",
+      "label": "baseline scene is the Bannered Mare",
+      "include": [
+        "nearby_actors"
+      ],
+      "radius": 2048,
+      "expect": {
+        "player.cell_form_id": {
+          "eq": 90206
+        },
+        "player.interior": true,
+        "nearby_actors[*].name": {
+          "eq": "Hulda"
+        }
+      }
+    },
+    {
+      "type": "console",
+      "cmd": "player.additem 1B000D63 1",
+      "settle": 1
+    },
+    {
+      "type": "console",
+      "cmd": "player.equipitem 1B000D63",
+      "settle": 1
+    },
+    {
+      "type": "assert_state",
+      "label": "Slow Time ring is present and worn",
+      "include": [
+        "inventory"
+      ],
+      "expect": {
+        "inventory[*].form_id": {
+          "eq": 452988259
+        },
+        "inventory[*].worn": true
+      }
+    },
+    {
+      "type": "handoff_user",
+      "message": "看一眼遊戲畫面：人應該在戰友蜜酒館裡；裝備欄已穿上 Bend Time Rings 的 Slow Time ring。確認畫面正常、沒有紫貼圖/缺模型/卡死。",
+      "expect": "tavern renders normally and the ring can be worn"
+    }
+  ],
+  "teardown": [
+    {
+      "type": "kill",
+      "mo2": true
+    }
+  ]
+}
