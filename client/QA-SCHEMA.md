@@ -35,9 +35,9 @@ Any step accepts `label` (what shows in the report), `comment` (ignored, for hum
 | `kill` | `mo2`, `timeout` | `mo2: true` also closes MO2, which is what makes the profile writable |
 | `load_baseline` | `save`, `settle`, `timeout` | falls back to the top-level `baseline` |
 | `console` | `cmd`, `ref`, `settle`, `timeout` | `ref` is the console's selected reference, for dotted commands |
-| `move_to_actor` | `name`, `distance`, `settle`, `timeout` | move player beside a uniquely named actor in the current cell; distance defaults to 128 |
-| `activate_actor` | `name`, `settle`, `timeout` | start normal player dialogue with a current-cell actor |
-| `select_dialogue` | `text`, `contains`, `settle`, `timeout` | select one currently visible option; exact text by default, unique substring with `contains: true` |
+| `move_to_actor` | `name` or `form_id`, `scope`, `distance`, `retry_for`, `retry_interval`, `settle`, `timeout` | move beside an actor; `scope` is `cell` (default) or `loaded`, distance defaults to 128; may cross cells |
+| `activate_actor` | `name` or `form_id`, `scope`, `retry_for`, `retry_interval`, `settle`, `timeout` | start normal dialogue after the actor is loaded in the current cell |
+| `select_dialogue` | `text` or `index` or `info_form_id`, `contains`, `retry_for`, `retry_interval`, `settle`, `timeout` | select one visible option; exact text by default |
 | `close_dialogue` | `settle`, `timeout` | end active player dialogue |
 | `assert_global` | `editor_id`, `expect`, `retry_for`, `retry_interval`, `timeout` | compare a TESGlobal's structured runtime value |
 | `wait` | `seconds` | |
@@ -63,7 +63,7 @@ left a folder behind.
 
 Paths use `.` for object keys, `[N]` for one array element (negatives allowed) and `[*]`
 for all of them. Ask for the optional blocks you reference via `include`
-(`nearby_actors`, `cell_actors`, `inventory`, `quests`, `plugins`) — `player` and `game`
+(`nearby_actors`, `cell_actors`, `loaded_actors`, `inventory`, `quests`, `plugins`) — `player` and `game`
 are always there. `game.dialogue` always reports whether the menu is open, its speaker,
 and structured visible options.
 
@@ -80,6 +80,20 @@ The semantic interaction steps compose without any screen or desktop input:
 { "type": "assert_global", "editor_id": "MFLiving_MFLN_Falas_Favor",
   "expect": { "eq": 5 } }
 ```
+
+For transitions where the actor is not yet in the current cell, use the runtime FormID
+reported by an actor block and let the action retry instead of inserting a fixed sleep:
+
+```jsonc
+{ "type": "move_to_actor", "form_id": "0x02001234", "scope": "loaded",
+  "retry_for": 20, "retry_interval": 1 },
+{ "type": "activate_actor", "form_id": "0x02001234", "retry_for": 10 },
+{ "type": "select_dialogue", "info_form_id": "0x02005678", "retry_for": 10 }
+```
+
+Bare numeric FormIDs are accepted, but hex strings are easier to compare with console and
+plugin tooling. These are **runtime reference IDs**, including the load-order prefix—not
+houseCARL's `XXXXXX:Plugin.esp` serialization.
 
 Operators: `eq` `ne` `gt` `gte` `lt` `lte` `contains` `not_contains` `matches` (regex)
 `exists` `count_eq` `count_gte` `count_lte`. Exactly one per path.

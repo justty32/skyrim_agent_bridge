@@ -16,6 +16,7 @@ namespace State {
     struct Options {
         bool nearby = false;
         bool cellActors = false;
+        bool loadedActors = false;
         bool inventory = false;
         bool quests = false;
         bool plugins = false;     // the load order as the engine actually resolved it —

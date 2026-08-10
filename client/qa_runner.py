@@ -263,34 +263,46 @@ class Runner:
         return result
 
     def step_move_to_actor(self, step) -> dict:
-        result = bridge.move_to_actor(require(step, "name"),
-                                      distance=step.get("distance", 128.0),
-                                      timeout=step.get("timeout", 20.0))
+        result = retry_for_ok(
+            lambda: bridge.move_to_actor(
+                step.get("name"), form_id=step.get("form_id"),
+                scope=step.get("scope", "cell"), distance=step.get("distance", 128.0),
+                timeout=step.get("timeout", 20.0)),
+            step.get("retry_for", 0), step.get("retry_interval", 1.0))
         if not result.get("ok"):
-            raise StepFailed(f"move-to-actor failed: {result.get('error')}")
+            raise StepFailed(f"move-to-actor failed after {result['attempts']} attempt(s): "
+                             f"{result.get('error')}")
         settle = step.get("settle", self.defaults.get("settle_seconds", 0))
         if settle:
             time.sleep(settle)
         return result
 
     def step_activate_actor(self, step) -> dict:
-        result = bridge.activate_actor(require(step, "name"),
-                                       timeout=step.get("timeout", 20.0))
+        result = retry_for_ok(
+            lambda: bridge.activate_actor(
+                step.get("name"), form_id=step.get("form_id"),
+                scope=step.get("scope", "cell"), timeout=step.get("timeout", 20.0)),
+            step.get("retry_for", 0), step.get("retry_interval", 1.0))
         if not result.get("ok"):
-            raise StepFailed(f"activate-actor failed: {result.get('error')}")
+            raise StepFailed(f"activate-actor failed after {result['attempts']} attempt(s): "
+                             f"{result.get('error')}")
         settle = step.get("settle", self.defaults.get("settle_seconds", 0))
         if settle:
             time.sleep(settle)
         return result
 
     def step_select_dialogue(self, step) -> dict:
-        result = bridge.select_dialogue(require(step, "text"),
-                                        contains=step.get("contains", False),
-                                        timeout=step.get("timeout", 20.0))
+        result = retry_for_ok(
+            lambda: bridge.select_dialogue(
+                step.get("text"), contains=step.get("contains", False),
+                index=step.get("index"), info_form_id=step.get("info_form_id"),
+                timeout=step.get("timeout", 20.0)),
+            step.get("retry_for", 0), step.get("retry_interval", 1.0))
         if not result.get("ok"):
             available = result.get("available") or []
             suffix = f"; available={available}" if available else ""
-            raise StepFailed(f"select-dialogue failed: {result.get('error')}{suffix}")
+            raise StepFailed(f"select-dialogue failed after {result['attempts']} attempt(s): "
+                             f"{result.get('error')}{suffix}")
         settle = step.get("settle", self.defaults.get("settle_seconds", 0))
         if settle:
             time.sleep(settle)
@@ -455,6 +467,18 @@ def wait_for(probe, timeout: float, interval: float = 2.0) -> dict:
         time.sleep(interval)
 
 
+def retry_for_ok(probe, timeout: float, interval: float = 1.0) -> dict:
+    """Retry a semantic action until it succeeds; always make at least one attempt."""
+    deadline = time.time() + max(0, timeout)
+    attempts = 0
+    while True:
+        attempts += 1
+        result = probe()
+        if result.get("ok") or time.time() >= deadline:
+            return {**result, "attempts": attempts}
+        time.sleep(interval)
+
+
 def require(step: dict, key: str):
     if key not in step:
         raise ConfigError(f"step {step.get('type')!r} needs `{key}`")
@@ -463,7 +487,8 @@ def require(step: dict, key: str):
 
 def describe(step: dict) -> str:
     kind = step.get("type", "?")
-    for key in ("cmd", "name", "text", "editor_id", "mod_name", "source", "message", "save", "seconds"):
+    for key in ("cmd", "name", "form_id", "text", "info_form_id", "index", "editor_id",
+                "mod_name", "source", "message", "save", "seconds"):
         if key in step:
             return f"{kind}: {step[key]}"
     return kind
@@ -513,10 +538,18 @@ def validate(spec: dict, base_dir: Path) -> list[str]:
                 problems.append(f"{where}: {kind} needs `mod_name`")
             if kind == "console" and not step.get("cmd"):
                 problems.append(f"{where}: console needs `cmd`")
-            if kind in ("move_to_actor", "activate_actor") and not step.get("name"):
-                problems.append(f"{where}: {kind} needs `name`")
-            if kind == "select_dialogue" and not step.get("text"):
-                problems.append(f"{where}: select_dialogue needs `text`")
+            if kind in ("move_to_actor", "activate_actor"):
+                selectors = [key for key in ("name", "form_id") if step.get(key) is not None]
+                if len(selectors) != 1:
+                    problems.append(f"{where}: {kind} needs exactly one of `name` or `form_id`")
+                if step.get("scope", "cell") not in ("cell", "loaded"):
+                    problems.append(f"{where}: {kind} scope must be `cell` or `loaded`")
+            if kind == "select_dialogue":
+                selectors = [key for key in ("text", "index", "info_form_id")
+                             if step.get(key) is not None]
+                if len(selectors) != 1:
+                    problems.append(f"{where}: select_dialogue needs exactly one of "
+                                    "`text`, `index`, or `info_form_id`")
             if kind == "assert_global":
                 if not step.get("editor_id"):
                     problems.append(f"{where}: assert_global needs `editor_id`")

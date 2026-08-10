@@ -25,17 +25,19 @@ Code reuse, when it comes, goes the other way: lift the scene-walking routines i
 
 ## Status
 
-Version 0.5.0. Working today:
+Version 0.6.0. The 0.5.0 current-cell actor/dialogue path is runtime-verified; the new
+0.6.0 cross-cell/loaded-actor additions are built and unit-tested, with live verification
+deferred until the user is no longer playing another game.
 
 | Route | Runs on | Notes |
 |---|---|---|
 | `GET /ping` | socket thread | Liveness. Answers during load screens on purpose — lets the runner tell "process alive, game busy" from "process dead". |
-| `GET /state` | game thread | `?include=nearby_actors,cell_actors,inventory,quests,plugins&radius=&limit=`. Player + game (including open dialogue and its options) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and at the main menu this can 503 while the task queue isn't draining — that's expected, use `/ping` for liveness. |
+| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`. `loaded_actors` walks all four engine process lists, deduplicates them, and exposes cell/FormID/3D-loaded state. Player + game (including open dialogue and its options) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and at the main menu this can 503 while the task queue isn't draining — that's expected, use `/ping` for liveness. |
 | `GET /global` | game thread | `?editor_id=...`; live TESGlobal value without parsing noisy console output. |
 | `POST /console` | game thread | `{"cmd": "...", "ref": "0x14"}`. `ref` is optional — it's the console's selected reference, for dotted commands. Output capture is one line and best-effort; see the pitfall below. |
-| `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","distance":128}`. Exact case-insensitive name, unique within the player's current cell. |
-| `POST /actor/activate` | game thread | `{"name":"Falas Indaryn"}`. Starts normal player dialogue without desktop input. |
-| `POST /dialogue/select` | game thread | `{"text":"Lower your weapon. Let's talk.","contains":false}`. Selects one visible option through the Dialogue Menu's structured callback. |
+| `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","scope":"loaded","distance":128}` or `{"form_id":"0x02001234"}`. Exact name or stable runtime reference ID; `scope=loaded` searches Skyrim's actor process lists and movement can cross cells. |
+| `POST /actor/activate` | game thread | Same actor selector. Starts normal player dialogue once the actor is loaded in the player's current cell. |
+| `POST /dialogue/select` | game thread | Select one visible option by exactly one of `text`, zero-based `index`, or runtime `info_form_id`, through the Dialogue Menu's structured callback. |
 | `POST /dialogue/close` | game thread | Ends the active player dialogue. |
 
 Loading a save is just `{"cmd": "load <save filename without extension>"}` — verified working
@@ -52,6 +54,17 @@ The semantic actor/dialogue path was verified end to end on 2026-08-10: enumerat
 current cell, find and move beside Falas, start dialogue, read the displayed options,
 select parley by exact text, and observe its TopicInfo script change a TESGlobal from
 0 to 5. No screen capture, OCR, keyboard, or mouse event participates in that chain.
+
+0.6.0 extends that path without changing the verified defaults: `scope=cell` and exact
+name still behave as before. FormID selectors remove same-name ambiguity; `scope=loaded`
+can find actors in the four `ProcessLists` buckets; a different-cell `move_to` first uses
+Skyrim's native reference-to-reference move, then applies the requested standing offset.
+The returned actor object states `cell_form_id`, `worldspace_form_id`, `loaded_3d`, and
+`disabled`, so callers can distinguish "known reference" from "ready to talk". Live QA
+must still establish which persistent unloaded references Skyrim can resolve in a given
+load order; the API reports a clean not-found instead of pretending every NPC exists.
+For `loaded_actors`, `distance` is geometrically meaningful only when `same_cell` is true;
+different interiors do not share a useful coordinate space.
 
 The Linux side of all this lives in [`client/`](client/README.md): `mo2ctl.py` installs
 and removes mods and starts the game with no MO2 GUI anywhere in the loop, `qa_runner.py`

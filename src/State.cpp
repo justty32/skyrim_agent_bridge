@@ -219,6 +219,9 @@ json State::Snapshot(const Options& a_options)
     if (a_options.cellActors) {
         out["cell_actors"] = StateActors::CurrentCell(player, a_options.limit);
     }
+    if (a_options.loadedActors) {
+        out["loaded_actors"] = StateActors::Loaded(player, a_options.limit);
+    }
     if (a_options.inventory) {
         out["inventory"] = InventoryBlock(player, a_options.limit);
     }

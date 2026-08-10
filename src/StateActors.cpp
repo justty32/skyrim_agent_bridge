@@ -1,6 +1,7 @@
 #include "StateActors.h"
 
 #include <algorithm>
+#include <unordered_set>
 #include <vector>
 
 using json = nlohmann::json;
@@ -26,6 +27,12 @@ namespace {
             { "in_combat", a_actor->IsInCombat() },
             { "hostile_to_player", a_actor->IsHostileToActor(a_player) },
             { "player_teammate", a_actor->IsPlayerTeammate() },
+            { "cell", a_actor->GetParentCell() && a_actor->GetParentCell()->GetFormEditorID()
+                ? a_actor->GetParentCell()->GetFormEditorID() : "" },
+            { "cell_form_id", a_actor->GetParentCell() ? a_actor->GetParentCell()->GetFormID() : 0 },
+            { "same_cell", a_actor->GetParentCell() == a_player->GetParentCell() },
+            { "loaded_3d", a_actor->Is3DLoaded() },
+            { "disabled", a_actor->IsDisabled() },
         };
     }
 
@@ -74,5 +81,25 @@ json StateActors::CurrentCell(RE::PlayerCharacter* a_player, std::size_t a_limit
         }
         return RE::BSContainer::ForEachResult::kContinue;
     });
+    return Finish(found, a_limit);
+}
+
+json StateActors::Loaded(RE::PlayerCharacter* a_player, std::size_t a_limit)
+{
+    auto* lists = RE::ProcessLists::GetSingleton();
+    if (!lists) return json::array();
+
+    const auto origin = a_player->GetPosition();
+    std::unordered_set<RE::FormID> seen;
+    std::vector<Entry> found;
+    for (auto* process : lists->allProcesses) {
+        if (!process) continue;
+        for (const auto& handle : *process) {
+            auto actor = handle.get();
+            if (!actor || actor.get() == a_player || !seen.insert(actor->GetFormID()).second) continue;
+            const float distance = origin.GetDistance(actor->GetPosition());
+            found.push_back({ distance, ActorValue(actor.get(), a_player, distance) });
+        }
+    }
     return Finish(found, a_limit);
 }

@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <format>
+#include <unordered_set>
 #include <vector>
 
 using json = nlohmann::json;
@@ -21,11 +22,19 @@ namespace {
     json ActorRef(RE::Actor* a_actor)
     {
         const auto pos = a_actor->GetPosition();
+        auto* cell = a_actor->GetParentCell();
+        auto* world = a_actor->GetWorldspace();
         return {
             { "name", a_actor->GetDisplayFullName() ? a_actor->GetDisplayFullName() : "" },
             { "form_id", a_actor->GetFormID() },
             { "base_form_id", a_actor->GetBaseObject() ? a_actor->GetBaseObject()->GetFormID() : 0 },
             { "position", { { "x", pos.x }, { "y", pos.y }, { "z", pos.z } } },
+            { "cell", cell && cell->GetFormEditorID() ? cell->GetFormEditorID() : "" },
+            { "cell_form_id", cell ? cell->GetFormID() : 0 },
+            { "worldspace", world && world->GetFormEditorID() ? world->GetFormEditorID() : "" },
+            { "worldspace_form_id", world ? world->GetFormID() : 0 },
+            { "loaded_3d", a_actor->Is3DLoaded() },
+            { "disabled", a_actor->IsDisabled() },
         };
     }
 
@@ -35,42 +44,88 @@ namespace {
         std::size_t matches{ 0 };
     };
 
-    ActorLookup FindActorInPlayerCell(std::string_view a_name)
+    void ConsiderActor(ActorLookup& a_found, RE::Actor* a_actor, RE::PlayerCharacter* a_player,
+                       const GameActions::ActorSelector& a_selector)
+    {
+        if (!a_actor || a_actor == a_player || a_actor->IsMarkedForDeletion()) return;
+        if (a_selector.formID != 0) {
+            if (a_actor->GetFormID() == a_selector.formID) {
+                a_found.actor = a_actor;
+                ++a_found.matches;
+            }
+            return;
+        }
+        const char* displayName = a_actor->GetDisplayFullName();
+        if (displayName && Fold(displayName) == Fold(a_selector.name)) {
+            a_found.actor = a_actor;
+            ++a_found.matches;
+        }
+    }
+
+    ActorLookup FindActor(const GameActions::ActorSelector& a_selector)
     {
         ActorLookup found;
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* cell = player ? player->GetParentCell() : nullptr;
-        if (!cell) return found;
+        if (!player || !cell) return found;
 
-        const std::string wanted = Fold(a_name);
+        if (a_selector.formID != 0) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_selector.formID);
+            if (actor && (a_selector.loadedScope || actor->GetParentCell() == cell)) {
+                ConsiderActor(found, actor, player, a_selector);
+            }
+            return found;
+        }
+
+        if (a_selector.loadedScope) {
+            auto* lists = RE::ProcessLists::GetSingleton();
+            if (!lists) return found;
+            std::unordered_set<RE::FormID> seen;
+            for (auto* process : lists->allProcesses) {
+                if (!process) continue;
+                for (const auto& handle : *process) {
+                    auto actor = handle.get();
+                    if (!actor || !seen.insert(actor->GetFormID()).second) continue;
+                    ConsiderActor(found, actor.get(), player, a_selector);
+                }
+            }
+            return found;
+        }
+
         cell->ForEachReference([&](RE::TESObjectREFR* a_ref) {
             auto* actor = a_ref ? a_ref->As<RE::Actor>() : nullptr;
-            if (!actor || actor == player) return RE::BSContainer::ForEachResult::kContinue;
-            const char* displayName = actor->GetDisplayFullName();
-            if (displayName && Fold(displayName) == wanted) {
-                found.actor = actor;
-                ++found.matches;
-            }
+            ConsiderActor(found, actor, player, a_selector);
             return RE::BSContainer::ForEachResult::kContinue;
         });
         return found;
     }
 
-    json LookupError(std::string_view a_name, const ActorLookup& a_lookup)
+    std::string Describe(const GameActions::ActorSelector& a_selector)
     {
+        return a_selector.formID != 0
+            ? std::format("form id 0x{:08X}", a_selector.formID)
+            : std::format("name '{}'", a_selector.name);
+    }
+
+    json LookupError(const GameActions::ActorSelector& a_selector, const ActorLookup& a_lookup)
+    {
+        const auto scope = a_selector.loadedScope ? "loaded actor set" : "player's current cell";
         if (a_lookup.matches == 0) {
             return { { "ok", false },
-                     { "error", std::format("no actor named '{}' in the player's current cell", a_name) } };
+                     { "error", std::format("no actor with {} in the {}", Describe(a_selector), scope) } };
         }
         return { { "ok", false },
-                 { "error", std::format("actor name '{}' is ambiguous ({} matches in current cell)",
-                                        a_name, a_lookup.matches) } };
+                 { "error", std::format("actor {} is ambiguous ({} matches in {})",
+                                        Describe(a_selector), a_lookup.matches, scope) } };
     }
 
     json MovePlayerNear(RE::Actor* a_actor, float a_distance)
     {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return { { "ok", false }, { "error", "no player" } };
+
+        const bool crossedCell = player->GetParentCell() != a_actor->GetParentCell();
+        if (crossedCell) player->MoveTo(a_actor);
 
         const auto actorPos = a_actor->GetPosition();
         const float angle = a_actor->GetAngleZ();
@@ -83,7 +138,8 @@ namespace {
 
         const float faceActor = std::atan2(actorPos.x - playerPos.x, actorPos.y - playerPos.y);
         player->SetAngle({ 0.0f, 0.0f, faceActor });
-        return { { "ok", true }, { "actor", ActorRef(a_actor) }, { "distance", a_distance } };
+        return { { "ok", true }, { "actor", ActorRef(a_actor) }, { "distance", a_distance },
+                 { "crossed_cell", crossedCell } };
     }
 
     struct DialogueLookup
@@ -94,13 +150,13 @@ namespace {
         std::vector<std::string> available;
     };
 
-    DialogueLookup FindDialogue(std::string_view a_text, bool a_contains)
+    DialogueLookup FindDialogue(const GameActions::DialogueSelector& a_selector)
     {
         DialogueLookup found;
         auto* manager = RE::MenuTopicManager::GetSingleton();
         if (!manager || !manager->dialogueList) return found;
 
-        const std::string wanted = Fold(a_text);
+        const std::string wanted = Fold(a_selector.text);
         std::size_t optionIndex = 0;
         for (auto* dialogue : *manager->dialogueList) {
             if (!dialogue) continue;
@@ -108,7 +164,13 @@ namespace {
             const std::string text = topicText ? topicText : "";
             found.available.push_back(text);
             const std::string folded = Fold(text);
-            if ((a_contains && folded.contains(wanted)) || (!a_contains && folded == wanted)) {
+            const bool match = a_selector.index
+                ? optionIndex == *a_selector.index
+                : a_selector.infoFormID != 0
+                    ? dialogue->parentTopicInfo && dialogue->parentTopicInfo->GetFormID() == a_selector.infoFormID
+                    : (a_selector.contains && folded.contains(wanted)) ||
+                      (!a_selector.contains && folded == wanted);
+            if (match) {
                 found.dialogue = dialogue;
                 found.optionIndex = optionIndex;
                 ++found.matches;
@@ -119,22 +181,34 @@ namespace {
     }
 }
 
-json GameActions::MoveToActor(std::string_view a_name, float a_distance)
+json GameActions::MoveToActor(const ActorSelector& a_selector, float a_distance)
 {
-    if (a_name.empty()) return { { "ok", false }, { "error", "actor name is required" } };
+    if (a_selector.name.empty() == (a_selector.formID == 0)) {
+        return { { "ok", false }, { "error", "provide exactly one of actor name or form_id" } };
+    }
     if (a_distance < 32.0f || a_distance > 2048.0f) {
         return { { "ok", false }, { "error", "distance must be between 32 and 2048" } };
     }
-    const auto found = FindActorInPlayerCell(a_name);
-    if (found.matches != 1) return LookupError(a_name, found);
+    const auto found = FindActor(a_selector);
+    if (found.matches != 1) return LookupError(a_selector, found);
+    if (found.actor->IsDisabled()) {
+        return { { "ok", false }, { "error", "target actor is disabled" }, { "actor", ActorRef(found.actor) } };
+    }
     return MovePlayerNear(found.actor, a_distance);
 }
 
-json GameActions::ActivateActor(std::string_view a_name)
+json GameActions::ActivateActor(const ActorSelector& a_selector)
 {
-    if (a_name.empty()) return { { "ok", false }, { "error", "actor name is required" } };
-    const auto found = FindActorInPlayerCell(a_name);
-    if (found.matches != 1) return LookupError(a_name, found);
+    if (a_selector.name.empty() == (a_selector.formID == 0)) {
+        return { { "ok", false }, { "error", "provide exactly one of actor name or form_id" } };
+    }
+    const auto found = FindActor(a_selector);
+    if (found.matches != 1) return LookupError(a_selector, found);
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (!player || found.actor->GetParentCell() != player->GetParentCell() || !found.actor->Is3DLoaded()) {
+        return { { "ok", false }, { "error", "target actor must be loaded in the player's current cell; move_to it first" },
+                 { "actor", ActorRef(found.actor) } };
+    }
 
     const bool dialogueStarted = found.actor->SetDialogueWithPlayer(true, false, nullptr);
     return {
@@ -144,7 +218,7 @@ json GameActions::ActivateActor(std::string_view a_name)
     };
 }
 
-json GameActions::SelectDialogue(std::string_view a_text, bool a_contains)
+json GameActions::SelectDialogue(const DialogueSelector& a_selector)
 {
     auto* ui = RE::UI::GetSingleton();
     auto* manager = RE::MenuTopicManager::GetSingleton();
@@ -152,7 +226,13 @@ json GameActions::SelectDialogue(std::string_view a_text, bool a_contains)
         return { { "ok", false }, { "error", "Dialogue Menu is not open" } };
     }
 
-    const auto found = FindDialogue(a_text, a_contains);
+    const auto selectorCount = (!a_selector.text.empty() ? 1 : 0) +
+        (a_selector.index.has_value() ? 1 : 0) + (a_selector.infoFormID != 0 ? 1 : 0);
+    if (selectorCount != 1) {
+        return { { "ok", false }, { "error", "provide exactly one of text, index, or info_form_id" } };
+    }
+
+    const auto found = FindDialogue(a_selector);
     if (found.matches != 1 || !found.dialogue) {
         return {
             { "ok", false },

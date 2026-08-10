@@ -3,14 +3,15 @@
 
 Phase 2.2. Registered alongside houseCARL in ~/.claude.json.
 
-Seven tools, chosen by how often they get called rather than by what exists:
+Eight tools, chosen by how often they get called rather than by what exists:
 
   qa_status   is the game up, is the profile safe to edit
   qa_state    the /state snapshot — the thing assertions are written against
   qa_console  run a console command
-  qa_actor    move to or start dialogue with an actor in the current cell
+  qa_actor    locate/move to/start dialogue with an actor by name or FormID
   qa_dialogue select or close structured dialogue
   qa_global   read a TESGlobal by EditorID
+  qa_wait     wait until structured game-state conditions become true
   qa_run      execute a qa.json and return the report
 
 Deliberately NOT exposed: install / uninstall / launch / kill. Those are one Bash
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import traceback
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,10 +41,10 @@ import mo2ctl
 import qa_runner
 
 SERVER_NAME = "skyrim-qa"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
-INCLUDE_VALUES = ["nearby_actors", "cell_actors", "inventory", "quests", "plugins"]
+INCLUDE_VALUES = ["nearby_actors", "cell_actors", "loaded_actors", "inventory", "quests", "plugins"]
 
 TOOLS = [
     {
@@ -104,19 +106,25 @@ TOOLS = [
     {
         "name": "qa_actor",
         "description": (
-            "Operate on one uniquely named actor in the player's current cell without "
-            "desktop input. `move_to` places the player beside and facing the actor; "
-            "`activate` starts normal player dialogue. Discover names with "
-            "qa_state(include=['cell_actors'])."
+            "Operate on an actor by exact display name or runtime reference FormID without "
+            "desktop input. `move_to` places the player beside and facing the actor and may "
+            "cross cells; `activate` starts dialogue once both are in the current cell. "
+            "Use scope=loaded for actors in Skyrim's active process lists."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["move_to", "activate"]},
                 "name": {"type": "string", "description": "Exact actor display name (case-insensitive)."},
+                "form_id": {"oneOf": [{"type": "string"}, {"type": "integer"}],
+                            "description": "Runtime reference FormID, e.g. '0x02001234'. Use instead of name."},
+                "scope": {"type": "string", "enum": ["cell", "loaded"],
+                          "description": "Name search scope; default cell. FormID + loaded can address a persistent reference."},
                 "distance": {"type": "number", "description": "For move_to: 32-2048 game units; default 128."},
+                "retry_for": {"type": "number", "description": "Retry while an actor/cell is still loading; default 0 seconds."},
+                "retry_interval": {"type": "number", "description": "Seconds between retries; default 1."},
             },
-            "required": ["action", "name"],
+            "required": ["action"],
         },
     },
     {
@@ -131,7 +139,13 @@ TOOLS = [
             "properties": {
                 "action": {"type": "string", "enum": ["select", "close"]},
                 "text": {"type": "string", "description": "Required for select."},
+                "index": {"type": "integer", "minimum": 0,
+                          "description": "Visible option index; use instead of text."},
+                "info_form_id": {"oneOf": [{"type": "string"}, {"type": "integer"}],
+                                 "description": "TopicInfo runtime FormID; use instead of text."},
                 "contains": {"type": "boolean", "description": "Use a unique substring instead of exact text."},
+                "retry_for": {"type": "number", "description": "Wait for the option/menu to appear; default 0 seconds."},
+                "retry_interval": {"type": "number", "description": "Seconds between retries; default 1."},
             },
             "required": ["action"],
         },
@@ -145,6 +159,28 @@ TOOLS = [
                 "editor_id": {"type": "string"},
             },
             "required": ["editor_id"],
+        },
+    },
+    {
+        "name": "qa_wait",
+        "description": (
+            "Poll structured qa_state until every JSON-path expectation passes. Use this "
+            "after doors, loads, dialogue actions, or delayed NPC package changes instead "
+            "of sleeping. Conditions use the qa.json operators: eq, ne, gt, gte, lt, lte, "
+            "contains, not_contains, matches, exists, and count_eq/count_gte/count_lte."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "expect": {"type": "object",
+                           "description": "Map of dotted JSON paths to one-operator condition objects."},
+                "include": {"type": "array", "items": {"type": "string", "enum": INCLUDE_VALUES}},
+                "radius": {"type": "number"},
+                "limit": {"type": "integer"},
+                "retry_for": {"type": "number", "description": "Total wait budget; default 20 seconds."},
+                "retry_interval": {"type": "number", "description": "Poll interval; default 1 second."},
+            },
+            "required": ["expect"],
         },
     },
     {
@@ -213,27 +249,39 @@ def tool_qa_console(args: dict) -> dict:
 
 
 def tool_qa_actor(args: dict) -> dict:
-    action, name = args.get("action"), args.get("name")
-    if not name:
-        raise ToolError("`name` is required")
+    action, name, form_id = args.get("action"), args.get("name"), args.get("form_id")
+    if (name is None) == (form_id is None):
+        raise ToolError("provide exactly one of `name` or `form_id`")
+    scope = args.get("scope", "cell")
+    if scope not in ("cell", "loaded"):
+        raise ToolError("`scope` must be `cell` or `loaded`")
     if action == "move_to":
-        result = bridge.move_to_actor(name, distance=args.get("distance", 128.0))
+        probe = lambda: bridge.move_to_actor(
+            name, form_id=form_id, scope=scope, distance=args.get("distance", 128.0))
     elif action == "activate":
-        result = bridge.activate_actor(name)
+        probe = lambda: bridge.activate_actor(name, form_id=form_id, scope=scope)
     else:
         raise ToolError("`action` must be `move_to` or `activate`")
+    result = qa_runner.retry_for_ok(
+        probe, args.get("retry_for", 0), args.get("retry_interval", 1.0))
     if not result.get("ok"):
-        raise ToolError(f"actor {action} failed: {result.get('error')}")
+        raise ToolError(f"actor {action} failed after {result['attempts']} attempt(s): "
+                        f"{result.get('error')}")
     return result
 
 
 def tool_qa_dialogue(args: dict) -> dict:
     action = args.get("action")
     if action == "select":
-        text = args.get("text")
-        if not text:
-            raise ToolError("`text` is required when action is `select`")
-        result = bridge.select_dialogue(text, contains=args.get("contains", False))
+        selectors = [key for key in ("text", "index", "info_form_id")
+                     if args.get(key) is not None]
+        if len(selectors) != 1:
+            raise ToolError("select needs exactly one of `text`, `index`, or `info_form_id`")
+        result = qa_runner.retry_for_ok(
+            lambda: bridge.select_dialogue(
+                args.get("text"), contains=args.get("contains", False),
+                index=args.get("index"), info_form_id=args.get("info_form_id")),
+            args.get("retry_for", 0), args.get("retry_interval", 1.0))
     elif action == "close":
         result = bridge.close_dialogue()
     else:
@@ -243,6 +291,45 @@ def tool_qa_dialogue(args: dict) -> dict:
         suffix = f"; available={available}" if available else ""
         raise ToolError(f"dialogue {action} failed: {result.get('error')}{suffix}")
     return result
+
+
+def tool_qa_wait(args: dict) -> dict:
+    expect = args.get("expect")
+    if not isinstance(expect, dict) or not expect:
+        raise ToolError("`expect` must be a non-empty object")
+    include = args.get("include") or []
+    unknown = [item for item in include if item not in INCLUDE_VALUES]
+    if unknown:
+        raise ToolError(f"unknown include value(s): {unknown}. Valid: {INCLUDE_VALUES}")
+
+    budget = max(0, args.get("retry_for", 20))
+    interval = args.get("retry_interval", 1.0)
+    started = time.time()
+    deadline = started + budget
+    attempts = 0
+    failures = []
+    while True:
+        attempts += 1
+        snapshot = bridge.state(include, radius=args.get("radius"), limit=args.get("limit"))
+        if snapshot.get("ok"):
+            try:
+                failures = [failure for failure in
+                            (qa_runner.check(snapshot, path, condition)
+                             for path, condition in expect.items()) if failure]
+            except qa_runner.ConfigError as exc:
+                raise ToolError(f"invalid expectation: {exc}") from exc
+            if not failures:
+                return {"ok": True, "attempts": attempts,
+                        "elapsed_s": round(time.time() - started, 1), "state": snapshot}
+        if time.time() >= deadline:
+            detail = "; ".join(
+                f"{failure['path']} {failure['op']} {failure['expected']!r} "
+                f"(actual {failure['actual']!r})" for failure in failures)
+            if not snapshot.get("ok"):
+                detail = f"state unavailable: {snapshot.get('error')}"
+            raise ToolError(f"state conditions did not pass after {attempts} attempt(s) "
+                            f"over {budget}s: {detail}")
+        time.sleep(interval)
 
 
 def tool_qa_global(args: dict) -> dict:
@@ -284,6 +371,7 @@ HANDLERS = {
     "qa_actor": tool_qa_actor,
     "qa_dialogue": tool_qa_dialogue,
     "qa_global": tool_qa_global,
+    "qa_wait": tool_qa_wait,
     "qa_run": tool_qa_run,
 }
 

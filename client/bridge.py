@@ -77,23 +77,45 @@ def console(cmd: str, ref: str | None = None, *, timeout: float = 30.0) -> dict:
     return _request("POST", "/console", body=body, timeout=timeout)
 
 
-def move_to_actor(name: str, *, distance: float = 128.0,
+def _actor_body(name: str | None, form_id: str | int | None, scope: str) -> dict:
+    body: dict = {"scope": scope}
+    if name is not None:
+        body["name"] = name
+    if form_id is not None:
+        body["form_id"] = form_id
+    return body
+
+
+def move_to_actor(name: str | None = None, *, form_id: str | int | None = None,
+                  scope: str = "cell", distance: float = 128.0,
                   timeout: float = DEFAULT_TIMEOUT) -> dict:
-    """Move the player beside a uniquely named actor in the current cell."""
+    """Move the player beside an actor selected by exact name or runtime FormID."""
+    body = _actor_body(name, form_id, scope)
+    body["distance"] = distance
     return _request("POST", "/actor/move-to",
-                    body={"name": name, "distance": distance}, timeout=timeout)
+                    body=body, timeout=timeout)
 
 
-def activate_actor(name: str, *, timeout: float = DEFAULT_TIMEOUT) -> dict:
-    """Activate a uniquely named actor in the current cell as the player."""
-    return _request("POST", "/actor/activate", body={"name": name}, timeout=timeout)
+def activate_actor(name: str | None = None, *, form_id: str | int | None = None,
+                   scope: str = "cell", timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """Activate an actor selected by exact name or runtime FormID as the player."""
+    return _request("POST", "/actor/activate",
+                    body=_actor_body(name, form_id, scope), timeout=timeout)
 
 
-def select_dialogue(text: str, *, contains: bool = False,
+def select_dialogue(text: str | None = None, *, contains: bool = False,
+                    index: int | None = None, info_form_id: str | int | None = None,
                     timeout: float = DEFAULT_TIMEOUT) -> dict:
-    """Select one currently available dialogue option by its displayed text."""
+    """Select a visible dialogue option by text, display index, or TopicInfo FormID."""
+    body: dict = {"contains": contains}
+    if text is not None:
+        body["text"] = text
+    if index is not None:
+        body["index"] = index
+    if info_form_id is not None:
+        body["info_form_id"] = info_form_id
     return _request("POST", "/dialogue/select",
-                    body={"text": text, "contains": contains}, timeout=timeout)
+                    body=body, timeout=timeout)
 
 
 def close_dialogue(*, timeout: float = DEFAULT_TIMEOUT) -> dict:

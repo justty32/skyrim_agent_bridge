@@ -20,7 +20,22 @@ class SemanticStepTests(unittest.TestCase):
         result = self.runner.step_move_to_actor(
             {"type": "move_to_actor", "name": "Falas", "distance": 96})
         self.assertTrue(result["ok"])
-        move.assert_called_once_with("Falas", distance=96, timeout=20.0)
+        move.assert_called_once_with(
+            "Falas", form_id=None, scope="cell", distance=96, timeout=20.0)
+
+    @patch("qa_runner.bridge.move_to_actor")
+    def test_move_to_actor_accepts_form_id_and_retries(self, move):
+        move.side_effect = [
+            {"ok": False, "error": "not loaded"},
+            {"ok": True, "actor": {"form_id": 0x1234}},
+        ]
+        result = self.runner.step_move_to_actor({
+            "type": "move_to_actor", "form_id": "0x1234", "scope": "loaded",
+            "retry_for": 1, "retry_interval": 0,
+        })
+        self.assertEqual(result["attempts"], 2)
+        move.assert_called_with(
+            None, form_id="0x1234", scope="loaded", distance=128.0, timeout=20.0)
 
     @patch("qa_runner.bridge.select_dialogue")
     def test_select_dialogue_reports_available_options(self, select):
@@ -32,6 +47,16 @@ class SemanticStepTests(unittest.TestCase):
         with self.assertRaisesRegex(qa_runner.StepFailed, "available=.*Parley"):
             self.runner.step_select_dialogue(
                 {"type": "select_dialogue", "text": "Missing"})
+
+    @patch("qa_runner.bridge.select_dialogue")
+    def test_select_dialogue_accepts_topic_info_form_id(self, select):
+        select.return_value = {"ok": True, "info_form_id": 0xABC}
+        result = self.runner.step_select_dialogue({
+            "type": "select_dialogue", "info_form_id": "0xABC",
+        })
+        self.assertEqual(result["info_form_id"], 0xABC)
+        select.assert_called_once_with(
+            None, contains=False, index=None, info_form_id="0xABC", timeout=20.0)
 
     @patch("qa_runner.bridge.global_value")
     def test_assert_global_uses_structured_value(self, global_value):
@@ -48,8 +73,8 @@ class SemanticStepTests(unittest.TestCase):
         spec = {
             "steps": [
                 {"type": "move_to_actor", "name": "Falas"},
-                {"type": "activate_actor", "name": "Falas"},
-                {"type": "select_dialogue", "text": "Let's talk."},
+                {"type": "activate_actor", "form_id": "0x1234", "scope": "loaded"},
+                {"type": "select_dialogue", "info_form_id": "0x5678"},
                 {"type": "assert_global", "editor_id": "Favor", "expect": {"eq": 5}},
                 {"type": "close_dialogue"},
             ]
@@ -65,8 +90,8 @@ class SemanticStepTests(unittest.TestCase):
             ]
         }
         problems = qa_runner.validate(spec, Path(tempfile.gettempdir()))
-        self.assertTrue(any("move_to_actor needs `name`" in p for p in problems))
-        self.assertTrue(any("select_dialogue needs `text`" in p for p in problems))
+        self.assertTrue(any("move_to_actor needs exactly one" in p for p in problems))
+        self.assertTrue(any("select_dialogue needs exactly one" in p for p in problems))
         self.assertTrue(any("assert_global needs `editor_id`" in p for p in problems))
         self.assertTrue(any("unknown operator 'wat'" in p for p in problems))
 
