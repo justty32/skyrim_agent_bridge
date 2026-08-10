@@ -9,8 +9,8 @@ contract, and a two-sided edit should be one commit.
 |---|---|---|
 | `mo2ctl.py` | ✅ verified end-to-end 2026-08-02 | Drive MO2 without its GUI: install / uninstall / enable / disable / launch / kill / status |
 | `bridge.py` | ✅ | Talking to the in-game HTTP bridge. Owns the port; everything else imports it |
-| `qa_runner.py` | ✅ verified 2026-08-02 | Execute a `qa.json`, report pass/fail per step. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
-| `qa_mcp.py` | ✅ registered 2026-08-02 | MCP server: `qa_status` / `qa_state` / `qa_console` / `qa_run`, so Claude stops shelling out to curl |
+| `qa_runner.py` | ✅ verified 2026-08-10 | Execute a `qa.json`, including semantic actor/dialogue steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
+| `qa_mcp.py` | ✅ registered; semantic surface added 2026-08-10 | MCP server: state, console, actor, dialogue, global, and whole-run tools |
 
 stdlib only, no venv. This has to keep working while the rest of the toolchain is
 mid-rebuild, and a QA harness that needs its own install step before it can test
@@ -221,6 +221,9 @@ startup, so registering it mid-session does nothing for that session.
 | `qa_status` | is the game up, is the profile safe to edit |
 | `qa_state` | the `/state` snapshot — what assertions are written against |
 | `qa_console` | run a console command |
+| `qa_actor` | move beside or start dialogue with a uniquely named current-cell actor |
+| `qa_dialogue` | select a visible dialogue option by text, or close dialogue |
+| `qa_global` | read a TESGlobal by EditorID |
 | `qa_run` | execute a qa.json, return the report |
 
 **What is deliberately not exposed: `install`, `uninstall`, `launch`, `kill`.** Each is one

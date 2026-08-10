@@ -1,6 +1,7 @@
 #include "Routes.h"
 
 #include "Console.h"
+#include "GameActions.h"
 #include "GameThread.h"
 #include "HttpServer.h"
 #include "State.h"
@@ -29,7 +30,7 @@ namespace {
         return Http::Response::Ok({
             { "ok", true },
             { "plugin", "AgentBridge" },
-            { "version", "0.4.0" },
+            { "version", "0.5.0" },
         });
     }
 
@@ -43,6 +44,7 @@ namespace {
 
         const std::string include = req.Get("include");
         options.nearby = include.find("nearby") != std::string::npos;
+        options.cellActors = include.find("cell_actors") != std::string::npos;
         options.inventory = include.find("inventory") != std::string::npos;
         options.quests = include.find("quests") != std::string::npos;
         options.plugins = include.find("plugins") != std::string::npos;
@@ -117,11 +119,79 @@ namespace {
         }
         return Http::Response::Ok(*ran);
     }
+
+    Http::Response ActorMove(const Http::Request& req)
+    {
+        std::string name;
+        float distance = 128.0f;
+        try {
+            const auto body = json::parse(req.body.empty() ? "{}" : req.body);
+            name = body.value("name", std::string{});
+            distance = body.value("distance", distance);
+        } catch (const std::exception& e) {
+            return Http::Response::Error(400, std::string{ "bad JSON body: " } + e.what());
+        }
+        auto result = GameThread::Run([name, distance] { return GameActions::MoveToActor(name, distance); });
+        if (!result) return Http::Response::Error(503, "game thread did not respond in time");
+        return result->value("ok", false) ? Http::Response::Ok(*result) : Http::Response{ 400, *result };
+    }
+
+    Http::Response ActorActivate(const Http::Request& req)
+    {
+        std::string name;
+        try {
+            const auto body = json::parse(req.body.empty() ? "{}" : req.body);
+            name = body.value("name", std::string{});
+        } catch (const std::exception& e) {
+            return Http::Response::Error(400, std::string{ "bad JSON body: " } + e.what());
+        }
+        auto result = GameThread::Run([name] { return GameActions::ActivateActor(name); });
+        if (!result) return Http::Response::Error(503, "game thread did not respond in time");
+        return result->value("ok", false) ? Http::Response::Ok(*result) : Http::Response{ 400, *result };
+    }
+
+    Http::Response DialogueSelect(const Http::Request& req)
+    {
+        std::string text;
+        bool contains = false;
+        try {
+            const auto body = json::parse(req.body.empty() ? "{}" : req.body);
+            text = body.value("text", std::string{});
+            contains = body.value("contains", false);
+        } catch (const std::exception& e) {
+            return Http::Response::Error(400, std::string{ "bad JSON body: " } + e.what());
+        }
+        auto result = GameThread::Run([text, contains] {
+            return GameActions::SelectDialogue(text, contains);
+        });
+        if (!result) return Http::Response::Error(503, "game thread did not respond in time");
+        return result->value("ok", false) ? Http::Response::Ok(*result) : Http::Response{ 400, *result };
+    }
+
+    Http::Response DialogueClose(const Http::Request&)
+    {
+        auto result = GameThread::Run([] { return GameActions::CloseDialogue(); });
+        if (!result) return Http::Response::Error(503, "game thread did not respond in time");
+        return result->value("ok", false) ? Http::Response::Ok(*result) : Http::Response{ 400, *result };
+    }
+
+    Http::Response GlobalRead(const Http::Request& req)
+    {
+        const std::string editorID = req.Get("editor_id");
+        auto result = GameThread::Run([editorID] { return GameActions::ReadGlobal(editorID); });
+        if (!result) return Http::Response::Error(503, "game thread did not respond in time");
+        return result->value("ok", false) ? Http::Response::Ok(*result) : Http::Response{ 400, *result };
+    }
 }
 
 void Routes::Register()
 {
     Http::Route("GET", "/ping", Ping);
     Http::Route("GET", "/state", StateRoute);
+    Http::Route("GET", "/global", GlobalRead);
     Http::Route("POST", "/console", ConsoleCmd);
+    Http::Route("POST", "/actor/move-to", ActorMove);
+    Http::Route("POST", "/actor/activate", ActorActivate);
+    Http::Route("POST", "/dialogue/select", DialogueSelect);
+    Http::Route("POST", "/dialogue/close", DialogueClose);
 }

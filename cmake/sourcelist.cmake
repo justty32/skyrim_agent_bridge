@@ -4,4 +4,6 @@ set(sources ${sources}
     src/Routes.cpp
     src/Console.cpp
     src/State.cpp
+    src/StateActors.cpp
+    src/GameActions.cpp
 )

@@ -15,6 +15,7 @@ namespace State {
     // step that only checks "did the cell change" should not pay for it.
     struct Options {
         bool nearby = false;
+        bool cellActors = false;
         bool inventory = false;
         bool quests = false;
         bool plugins = false;     // the load order as the engine actually resolved it —

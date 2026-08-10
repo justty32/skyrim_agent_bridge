@@ -6,4 +6,6 @@ set(headers ${headers}
     src/Routes.h
     src/Console.h
     src/State.h
+    src/StateActors.h
+    src/GameActions.h
 )

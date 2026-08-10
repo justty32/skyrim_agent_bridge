@@ -1,4 +1,5 @@
 #include "State.h"
+#include "StateActors.h"
 
 #include <algorithm>
 #include <string>
@@ -98,6 +99,11 @@ namespace {
 
         json dialogue = json::object();
         dialogue["active"] = false;
+        dialogue["menu_open"] = false;
+        dialogue["options"] = json::array();
+        if (auto* ui = RE::UI::GetSingleton()) {
+            dialogue["menu_open"] = ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME);
+        }
         if (auto* mtm = RE::MenuTopicManager::GetSingleton()) {
             if (auto* d = mtm->lastSelectedDialogue) {
                 dialogue["active"] = true;
@@ -107,51 +113,23 @@ namespace {
             if (auto speaker = mtm->speaker.get()) {
                 dialogue["speaker"] = Str(speaker->GetDisplayFullName());
             }
+            if (mtm->dialogueList) {
+                std::size_t index = 0;
+                for (auto* option : *mtm->dialogueList) {
+                    if (!option) continue;
+                    dialogue["options"].push_back({
+                        { "index", index++ },
+                        { "topic_index", option->unk14 },
+                        { "text", Str(option->topicText.c_str()) },
+                        { "topic_form_id", option->parentTopic ? option->parentTopic->GetFormID() : 0 },
+                        { "info_form_id", option->parentTopicInfo ? option->parentTopicInfo->GetFormID() : 0 },
+                    });
+                }
+            }
         }
         block["dialogue"] = dialogue;
 
         return block;
-    }
-
-    json NearbyBlock(RE::PlayerCharacter* player, float radius, std::size_t limit)
-    {
-        auto* lists = RE::ProcessLists::GetSingleton();
-        if (!lists) return json::array();
-
-        const auto origin = player->GetPosition();
-
-        // highActorHandles is the engine's own "actors currently simulated at
-        // full detail" list — exactly the set a QA assertion cares about, and far
-        // cheaper than walking every ref in the cell.
-        struct Entry { float distance; json value; };
-        std::vector<Entry> found;
-
-        for (const auto& handle : lists->highActorHandles) {
-            auto actor = handle.get();
-            if (!actor || actor.get() == player) continue;
-
-            const float distance = origin.GetDistance(actor->GetPosition());
-            if (distance > radius) continue;
-
-            found.push_back({ distance, json{
-                { "name", Str(actor->GetDisplayFullName()) },
-                { "form_id", actor->GetFormID() },
-                { "base_form_id", actor->GetBaseObject() ? actor->GetBaseObject()->GetFormID() : 0 },
-                { "distance", distance },
-                { "level", actor->GetLevel() },
-                { "dead", actor->IsDead() },
-                { "in_combat", actor->IsInCombat() },
-                { "hostile_to_player", actor->IsHostileToActor(player) },
-            } });
-        }
-
-        std::sort(found.begin(), found.end(),
-            [](const Entry& a, const Entry& b) { return a.distance < b.distance; });
-        if (found.size() > limit) found.resize(limit);
-
-        json out = json::array();
-        for (auto& e : found) out.push_back(std::move(e.value));
-        return out;
     }
 
     json InventoryBlock(RE::PlayerCharacter* player, std::size_t limit)
@@ -236,7 +214,10 @@ json State::Snapshot(const Options& a_options)
     };
 
     if (a_options.nearby) {
-        out["nearby_actors"] = NearbyBlock(player, a_options.radius, a_options.limit);
+        out["nearby_actors"] = StateActors::Nearby(player, a_options.radius, a_options.limit);
+    }
+    if (a_options.cellActors) {
+        out["cell_actors"] = StateActors::CurrentCell(player, a_options.limit);
     }
     if (a_options.inventory) {
         out["inventory"] = InventoryBlock(player, a_options.limit);

@@ -3,11 +3,14 @@
 
 Phase 2.2. Registered alongside houseCARL in ~/.claude.json.
 
-Four tools, chosen by how often they get called rather than by what exists:
+Seven tools, chosen by how often they get called rather than by what exists:
 
   qa_status   is the game up, is the profile safe to edit
   qa_state    the /state snapshot — the thing assertions are written against
   qa_console  run a console command
+  qa_actor    move to or start dialogue with an actor in the current cell
+  qa_dialogue select or close structured dialogue
+  qa_global   read a TESGlobal by EditorID
   qa_run      execute a qa.json and return the report
 
 Deliberately NOT exposed: install / uninstall / launch / kill. Those are one Bash
@@ -36,10 +39,10 @@ import mo2ctl
 import qa_runner
 
 SERVER_NAME = "skyrim-qa"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
-INCLUDE_VALUES = ["nearby_actors", "inventory", "quests", "plugins"]
+INCLUDE_VALUES = ["nearby_actors", "cell_actors", "inventory", "quests", "plugins"]
 
 TOOLS = [
     {
@@ -96,6 +99,52 @@ TOOLS = [
                         "description": "Optional selected reference FormID (hex like '0x14' or decimal), for dotted commands."},
             },
             "required": ["cmd"],
+        },
+    },
+    {
+        "name": "qa_actor",
+        "description": (
+            "Operate on one uniquely named actor in the player's current cell without "
+            "desktop input. `move_to` places the player beside and facing the actor; "
+            "`activate` starts normal player dialogue. Discover names with "
+            "qa_state(include=['cell_actors'])."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["move_to", "activate"]},
+                "name": {"type": "string", "description": "Exact actor display name (case-insensitive)."},
+                "distance": {"type": "number", "description": "For move_to: 32-2048 game units; default 128."},
+            },
+            "required": ["action", "name"],
+        },
+    },
+    {
+        "name": "qa_dialogue",
+        "description": (
+            "Select a visible player dialogue option by displayed text, or close the "
+            "current dialogue, without keyboard/mouse input. Read visible choices from "
+            "qa_state().game.dialogue.options first. Exact matching is the default."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["select", "close"]},
+                "text": {"type": "string", "description": "Required for select."},
+                "contains": {"type": "boolean", "description": "Use a unique substring instead of exact text."},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "qa_global",
+        "description": "Read a live TESGlobal value by EditorID without parsing console output.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "editor_id": {"type": "string"},
+            },
+            "required": ["editor_id"],
         },
     },
     {
@@ -163,6 +212,49 @@ def tool_qa_console(args: dict) -> dict:
     return result
 
 
+def tool_qa_actor(args: dict) -> dict:
+    action, name = args.get("action"), args.get("name")
+    if not name:
+        raise ToolError("`name` is required")
+    if action == "move_to":
+        result = bridge.move_to_actor(name, distance=args.get("distance", 128.0))
+    elif action == "activate":
+        result = bridge.activate_actor(name)
+    else:
+        raise ToolError("`action` must be `move_to` or `activate`")
+    if not result.get("ok"):
+        raise ToolError(f"actor {action} failed: {result.get('error')}")
+    return result
+
+
+def tool_qa_dialogue(args: dict) -> dict:
+    action = args.get("action")
+    if action == "select":
+        text = args.get("text")
+        if not text:
+            raise ToolError("`text` is required when action is `select`")
+        result = bridge.select_dialogue(text, contains=args.get("contains", False))
+    elif action == "close":
+        result = bridge.close_dialogue()
+    else:
+        raise ToolError("`action` must be `select` or `close`")
+    if not result.get("ok"):
+        available = result.get("available") or []
+        suffix = f"; available={available}" if available else ""
+        raise ToolError(f"dialogue {action} failed: {result.get('error')}{suffix}")
+    return result
+
+
+def tool_qa_global(args: dict) -> dict:
+    editor_id = args.get("editor_id")
+    if not editor_id:
+        raise ToolError("`editor_id` is required")
+    result = bridge.global_value(editor_id)
+    if not result.get("ok"):
+        raise ToolError(f"global read failed: {result.get('error')}")
+    return result
+
+
 def tool_qa_run(args: dict) -> dict:
     spec_path = Path(args["spec"]).expanduser()
     if not spec_path.is_absolute():
@@ -189,6 +281,9 @@ HANDLERS = {
     "qa_status": tool_qa_status,
     "qa_state": tool_qa_state,
     "qa_console": tool_qa_console,
+    "qa_actor": tool_qa_actor,
+    "qa_dialogue": tool_qa_dialogue,
+    "qa_global": tool_qa_global,
     "qa_run": tool_qa_run,
 }
 

@@ -25,13 +25,18 @@ Code reuse, when it comes, goes the other way: lift the scene-walking routines i
 
 ## Status
 
-Phase 0.1 skeleton. Working today:
+Version 0.5.0. Working today:
 
 | Route | Runs on | Notes |
 |---|---|---|
 | `GET /ping` | socket thread | Liveness. Answers during load screens on purpose — lets the runner tell "process alive, game busy" from "process dead". |
-| `GET /state` | game thread | `?include=nearby,inventory,quests,plugins&radius=&limit=`. Player + game blocks always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and at the main menu this can 503 while the task queue isn't draining — that's expected, use `/ping` for liveness. |
+| `GET /state` | game thread | `?include=nearby_actors,cell_actors,inventory,quests,plugins&radius=&limit=`. Player + game (including open dialogue and its options) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and at the main menu this can 503 while the task queue isn't draining — that's expected, use `/ping` for liveness. |
+| `GET /global` | game thread | `?editor_id=...`; live TESGlobal value without parsing noisy console output. |
 | `POST /console` | game thread | `{"cmd": "...", "ref": "0x14"}`. `ref` is optional — it's the console's selected reference, for dotted commands. Output capture is one line and best-effort; see the pitfall below. |
+| `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","distance":128}`. Exact case-insensitive name, unique within the player's current cell. |
+| `POST /actor/activate` | game thread | `{"name":"Falas Indaryn"}`. Starts normal player dialogue without desktop input. |
+| `POST /dialogue/select` | game thread | `{"text":"Lower your weapon. Let's talk.","contains":false}`. Selects one visible option through the Dialogue Menu's structured callback. |
+| `POST /dialogue/close` | game thread | Ends the active player dialogue. |
 
 Loading a save is just `{"cmd": "load <save filename without extension>"}` — verified working
 from the main menu, so there's no separate autoload mechanism to build.
@@ -42,6 +47,11 @@ this says what happened. `index` is the byte a FormID actually carries (`0x00`�
 for full plugins, `0xFE000`+ for light ones), so it doubles as the FormID prefix.
 
 Not built yet: `POST /screenshot`, `POST /input` — both deferred, see plan decision D6.
+
+The semantic actor/dialogue path was verified end to end on 2026-08-10: enumerate the
+current cell, find and move beside Falas, start dialogue, read the displayed options,
+select parley by exact text, and observe its TopicInfo script change a TESGlobal from
+0 to 5. No screen capture, OCR, keyboard, or mouse event participates in that chain.
 
 The Linux side of all this lives in [`client/`](client/README.md): `mo2ctl.py` installs
 and removes mods and starts the game with no MO2 GUI anywhere in the loop, `qa_runner.py`

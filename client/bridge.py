@@ -75,3 +75,33 @@ def console(cmd: str, ref: str | None = None, *, timeout: float = 30.0) -> dict:
     if ref:
         body["ref"] = ref
     return _request("POST", "/console", body=body, timeout=timeout)
+
+
+def move_to_actor(name: str, *, distance: float = 128.0,
+                  timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """Move the player beside a uniquely named actor in the current cell."""
+    return _request("POST", "/actor/move-to",
+                    body={"name": name, "distance": distance}, timeout=timeout)
+
+
+def activate_actor(name: str, *, timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """Activate a uniquely named actor in the current cell as the player."""
+    return _request("POST", "/actor/activate", body={"name": name}, timeout=timeout)
+
+
+def select_dialogue(text: str, *, contains: bool = False,
+                    timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """Select one currently available dialogue option by its displayed text."""
+    return _request("POST", "/dialogue/select",
+                    body={"text": text, "contains": contains}, timeout=timeout)
+
+
+def close_dialogue(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """End the current player dialogue without desktop input."""
+    return _request("POST", "/dialogue/close", body={}, timeout=timeout)
+
+
+def global_value(editor_id: str, *, timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """Read a TESGlobal by EditorID without relying on console output."""
+    query = urllib.parse.urlencode({"editor_id": editor_id})
+    return _request("GET", f"/global?{query}", timeout=timeout)

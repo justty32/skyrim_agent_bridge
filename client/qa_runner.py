@@ -262,6 +262,73 @@ class Runner:
             time.sleep(settle)
         return result
 
+    def step_move_to_actor(self, step) -> dict:
+        result = bridge.move_to_actor(require(step, "name"),
+                                      distance=step.get("distance", 128.0),
+                                      timeout=step.get("timeout", 20.0))
+        if not result.get("ok"):
+            raise StepFailed(f"move-to-actor failed: {result.get('error')}")
+        settle = step.get("settle", self.defaults.get("settle_seconds", 0))
+        if settle:
+            time.sleep(settle)
+        return result
+
+    def step_activate_actor(self, step) -> dict:
+        result = bridge.activate_actor(require(step, "name"),
+                                       timeout=step.get("timeout", 20.0))
+        if not result.get("ok"):
+            raise StepFailed(f"activate-actor failed: {result.get('error')}")
+        settle = step.get("settle", self.defaults.get("settle_seconds", 0))
+        if settle:
+            time.sleep(settle)
+        return result
+
+    def step_select_dialogue(self, step) -> dict:
+        result = bridge.select_dialogue(require(step, "text"),
+                                        contains=step.get("contains", False),
+                                        timeout=step.get("timeout", 20.0))
+        if not result.get("ok"):
+            available = result.get("available") or []
+            suffix = f"; available={available}" if available else ""
+            raise StepFailed(f"select-dialogue failed: {result.get('error')}{suffix}")
+        settle = step.get("settle", self.defaults.get("settle_seconds", 0))
+        if settle:
+            time.sleep(settle)
+        return result
+
+    def step_close_dialogue(self, step) -> dict:
+        result = bridge.close_dialogue(timeout=step.get("timeout", 20.0))
+        if not result.get("ok"):
+            raise StepFailed(f"close-dialogue failed: {result.get('error')}")
+        settle = step.get("settle", self.defaults.get("settle_seconds", 0))
+        if settle:
+            time.sleep(settle)
+        return result
+
+    def step_assert_global(self, step) -> dict:
+        editor_id = require(step, "editor_id")
+        condition = require(step, "expect")
+        budget = step.get("retry_for", self.defaults.get("assert_retry_seconds", 20))
+        interval = step.get("retry_interval", 2.0)
+        deadline = time.time() + budget
+        attempts = 0
+        while True:
+            attempts += 1
+            snapshot = bridge.global_value(editor_id, timeout=step.get("timeout", 20.0))
+            if snapshot.get("ok"):
+                failure = check(snapshot, "value", condition)
+                if not failure:
+                    return {"editor_id": editor_id, "value": snapshot["value"],
+                            "attempts": attempts}
+                error = "global expectation failed"
+            else:
+                failure = None
+                error = f"global unavailable: {snapshot.get('error')}"
+            if time.time() >= deadline:
+                raise StepFailed(f"{error} (after {attempts} attempt(s) over {budget}s)",
+                                 [failure] if failure else [])
+            time.sleep(interval)
+
     def step_wait(self, step) -> dict:
         seconds = step.get("seconds", 1)
         time.sleep(seconds)
@@ -396,7 +463,7 @@ def require(step: dict, key: str):
 
 def describe(step: dict) -> str:
     kind = step.get("type", "?")
-    for key in ("cmd", "mod_name", "source", "message", "save", "seconds"):
+    for key in ("cmd", "name", "text", "editor_id", "mod_name", "source", "message", "save", "seconds"):
         if key in step:
             return f"{kind}: {step[key]}"
     return kind
@@ -407,7 +474,9 @@ def describe(step: dict) -> str:
 # ---------------------------------------------------------------------------
 
 KNOWN_TYPES = {"install", "uninstall", "enable", "disable", "launch", "kill",
-               "load_baseline", "console", "wait", "assert_state", "handoff_user"}
+               "load_baseline", "console", "wait", "assert_state", "assert_global",
+               "move_to_actor", "activate_actor", "select_dialogue", "close_dialogue",
+               "handoff_user"}
 
 
 def validate(spec: dict, base_dir: Path) -> list[str]:
@@ -444,6 +513,18 @@ def validate(spec: dict, base_dir: Path) -> list[str]:
                 problems.append(f"{where}: {kind} needs `mod_name`")
             if kind == "console" and not step.get("cmd"):
                 problems.append(f"{where}: console needs `cmd`")
+            if kind in ("move_to_actor", "activate_actor") and not step.get("name"):
+                problems.append(f"{where}: {kind} needs `name`")
+            if kind == "select_dialogue" and not step.get("text"):
+                problems.append(f"{where}: select_dialogue needs `text`")
+            if kind == "assert_global":
+                if not step.get("editor_id"):
+                    problems.append(f"{where}: assert_global needs `editor_id`")
+                condition = step.get("expect")
+                if not isinstance(condition, dict) or len(condition) != 1:
+                    problems.append(f"{where}: assert_global needs one comparison in `expect`")
+                elif next(iter(condition)) not in OPS and next(iter(condition)) not in SET_OPS:
+                    problems.append(f"{where}: assert_global has unknown operator {next(iter(condition))!r}")
             if kind == "handoff_user" and not step.get("message"):
                 problems.append(f"{where}: handoff_user needs `message`")
             if kind == "load_baseline" and not (step.get("save") or spec.get("baseline")):

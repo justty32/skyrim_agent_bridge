@@ -35,6 +35,11 @@ Any step accepts `label` (what shows in the report), `comment` (ignored, for hum
 | `kill` | `mo2`, `timeout` | `mo2: true` also closes MO2, which is what makes the profile writable |
 | `load_baseline` | `save`, `settle`, `timeout` | falls back to the top-level `baseline` |
 | `console` | `cmd`, `ref`, `settle`, `timeout` | `ref` is the console's selected reference, for dotted commands |
+| `move_to_actor` | `name`, `distance`, `settle`, `timeout` | move player beside a uniquely named actor in the current cell; distance defaults to 128 |
+| `activate_actor` | `name`, `settle`, `timeout` | start normal player dialogue with a current-cell actor |
+| `select_dialogue` | `text`, `contains`, `settle`, `timeout` | select one currently visible option; exact text by default, unique substring with `contains: true` |
+| `close_dialogue` | `settle`, `timeout` | end active player dialogue |
+| `assert_global` | `editor_id`, `expect`, `retry_for`, `retry_interval`, `timeout` | compare a TESGlobal's structured runtime value |
 | `wait` | `seconds` | |
 | `assert_state` | `expect`, `include`, `radius`, `limit`, `retry_for`, `retry_interval` | see below |
 | `handoff_user` | `message`, `expect` | stop and ask a human |
@@ -58,7 +63,23 @@ left a folder behind.
 
 Paths use `.` for object keys, `[N]` for one array element (negatives allowed) and `[*]`
 for all of them. Ask for the optional blocks you reference via `include`
-(`nearby_actors`, `inventory`, `quests`, `plugins`) — `player` and `game` are always there.
+(`nearby_actors`, `cell_actors`, `inventory`, `quests`, `plugins`) — `player` and `game`
+are always there. `game.dialogue` always reports whether the menu is open, its speaker,
+and structured visible options.
+
+The semantic interaction steps compose without any screen or desktop input:
+
+```jsonc
+{ "type": "assert_state", "include": ["cell_actors"],
+  "expect": { "cell_actors[*].name": { "eq": "Falas Indaryn" } } },
+{ "type": "move_to_actor", "name": "Falas Indaryn", "distance": 128 },
+{ "type": "activate_actor", "name": "Falas Indaryn" },
+{ "type": "assert_state",
+  "expect": { "game.dialogue.options[*].text": { "eq": "Lower your weapon. Let's talk." } } },
+{ "type": "select_dialogue", "text": "Lower your weapon. Let's talk." },
+{ "type": "assert_global", "editor_id": "MFLiving_MFLN_Falas_Favor",
+  "expect": { "eq": 5 } }
+```
 
 Operators: `eq` `ne` `gt` `gte` `lt` `lte` `contains` `not_contains` `matches` (regex)
 `exists` `count_eq` `count_gte` `count_lte`. Exactly one per path.
