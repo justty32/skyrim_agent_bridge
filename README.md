@@ -25,9 +25,8 @@ Code reuse, when it comes, goes the other way: lift the scene-walking routines i
 
 ## Status
 
-Version 0.6.0. The 0.5.0 current-cell actor/dialogue path is runtime-verified; the new
-0.6.0 cross-cell/loaded-actor additions are built and unit-tested, with live verification
-deferred until the user is no longer playing another game.
+Version 0.6.0. The current-cell, loaded-actor, cross-cell, retry, and structured dialogue
+paths are runtime-verified.
 
 | Route | Runs on | Notes |
 |---|---|---|
@@ -65,6 +64,23 @@ must still establish which persistent unloaded references Skyrim can resolve in 
 load order; the API reports a clean not-found instead of pretending every NPC exists.
 For `loaded_actors`, `distance` is geometrically meaningful only when `same_cell` is true;
 different interiors do not share a useful coordinate space.
+
+### 0.6.0 live acceptance (2026-08-10)
+
+- Existing livingNpcs generic anchor/parley regression remained **31/31 PASS**.
+- `loaded_actors` returned 1,024 process-list actors at the requested limit with no
+  duplicate runtime FormIDs.
+- Falas was moved to and activated by runtime reference FormID; the parley TopicInfo was
+  selected once by display index and once by `info_form_id`. Both executions changed the
+  favor TESGlobal from 0 to 5, proving the TIF ran.
+- From the Bannered Mare, moving to unloaded persistent reference Lucan Valerius crossed
+  into Riverwood Trader; `loaded_3d` changed from false to true, state converged in 0.3s,
+  and dialogue opened by FormID.
+- `scope=loaded` name lookup followed Falas from Riverwood to his live exterior package
+  location (`WhiterunWatchtowerExterior02`) rather than assuming his configured anchor.
+- A deliberately delayed Riverwood transition made a current-cell Bjorn move fail four
+  times and succeed on attempt five; MCP `qa_wait` then confirmed cell, actor, and dialogue
+  conditions without fixed sleeps.
 
 The Linux side of all this lives in [`client/`](client/README.md): `mo2ctl.py` installs
 and removes mods and starts the game with no MO2 GUI anywhere in the loop, `qa_runner.py`

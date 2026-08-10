@@ -9,8 +9,8 @@ contract, and a two-sided edit should be one commit.
 |---|---|---|
 | `mo2ctl.py` | ✅ verified end-to-end 2026-08-02 | Drive MO2 without its GUI: install / uninstall / enable / disable / launch / kill / status |
 | `bridge.py` | ✅ | Talking to the in-game HTTP bridge. Owns the port; everything else imports it |
-| `qa_runner.py` | ✅ verified through 0.5.0; 0.6.0 unit-tested | Execute a `qa.json`, including retryable FormID/loaded-scope actor and structured dialogue steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
-| `qa_mcp.py` | ✅ registered; restart required for 0.3.0 tools | MCP server: state, console, actor, dialogue, global, structured wait, and whole-run tools |
+| `qa_runner.py` | ✅ 0.6.0 runtime-verified 2026-08-10 | Execute a `qa.json`, including retryable FormID/loaded-scope actor and structured dialogue steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
+| `qa_mcp.py` | ✅ 0.3.0 runtime-verified; client restart required to discover new tool schemas | MCP server: state, console, actor, dialogue, global, structured wait, and whole-run tools |
 
 stdlib only, no venv. This has to keep working while the rest of the toolchain is
 mid-rebuild, and a QA harness that needs its own install step before it can test
