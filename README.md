@@ -1,8 +1,10 @@
 # agent-bridge
 
 SKSE plugin that opens a localhost HTTP server **inside the running Skyrim process**, so a
-Linux-side agent can read game state, drive the console, grab screenshots and hand the
-keyboard back to a human — without touching the OS input/screen layer at all.
+Linux-side agent can read structured game state, drive the console, locate and move to
+actors, and operate dialogue — without touching the OS input/screen layer at all. Visual
+and UI-handfeel checks remain explicit human handoffs; screenshot and synthetic-input
+routes are deferred.
 
 The eyes and hands go *into* the game process. See
 [`workflows/plans/ai-ingame-qa-loop.md`](../../workflows/plans/ai-ingame-qa-loop.md)
@@ -13,8 +15,8 @@ useless against non-XWayland windows, and the game lives behind Proton's pressur
 ## Why a sibling of `scene-capture-bridge` and not part of it
 
 Decided 2026-08-02 (plan Phase 1.1). Both are SKSE C++23 DLLs on the same toolchain, and
-`scene-capture-bridge` already has the cell-walking / JSON-export code this will eventually
-want. But they have opposite lifecycles: `scene-capture-bridge` is an **authoring** tool a
+`scene-capture-bridge` already has related cell-walking / JSON-export patterns. But they
+have opposite lifecycles: `scene-capture-bridge` is an **authoring** tool a
 human drives with hotkeys and an ImGui panel, shipped alongside content; `agent-bridge` is
 **test harness** that must be installable and removable per QA run and must never end up in
 a player-facing load order. Folding a listening socket into the authoring tool would mean
