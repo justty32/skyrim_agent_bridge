@@ -1,5 +1,6 @@
 #include "State.h"
 #include "StateActors.h"
+#include "MessageBox.h"
 
 #include <algorithm>
 #include <string>
@@ -128,6 +129,7 @@ namespace {
             }
         }
         block["dialogue"] = dialogue;
+        block["message_box"] = StructuredMessageBox::Snapshot();
 
         return block;
     }

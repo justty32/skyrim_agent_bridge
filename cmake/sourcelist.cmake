@@ -6,4 +6,5 @@ set(sources ${sources}
     src/State.cpp
     src/StateActors.cpp
     src/GameActions.cpp
+    src/MessageBox.cpp
 )

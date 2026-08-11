@@ -58,6 +58,20 @@ class SemanticStepTests(unittest.TestCase):
         select.assert_called_once_with(
             None, contains=False, index=None, info_form_id="0xABC", timeout=20.0)
 
+    @patch("qa_runner.bridge.select_message_box")
+    def test_select_message_box_retries_with_message_guard(self, select):
+        select.side_effect = [
+            {"ok": False, "error": "MessageBoxMenu is not open"},
+            {"ok": True, "message": "Done Writing", "text": "OK", "index": 0},
+        ]
+        result = self.runner.step_select_message_box({
+            "type": "select_message_box", "text": "OK", "message": "Done Writing",
+            "retry_for": 1, "retry_interval": 0,
+        })
+        self.assertEqual(result["attempts"], 2)
+        select.assert_called_with(
+            "OK", index=None, message="Done Writing", timeout=20.0)
+
     @patch("qa_runner.bridge.global_value")
     def test_assert_global_uses_structured_value(self, global_value):
         global_value.return_value = {"ok": True, "editor_id": "Favor", "value": 5.0}
@@ -77,6 +91,7 @@ class SemanticStepTests(unittest.TestCase):
                 {"type": "select_dialogue", "info_form_id": "0x5678"},
                 {"type": "assert_global", "editor_id": "Favor", "expect": {"eq": 5}},
                 {"type": "close_dialogue"},
+                {"type": "select_message_box", "text": "OK", "message": "Done Writing"},
             ]
         }
         self.assertEqual(qa_runner.validate(spec, Path(tempfile.gettempdir())), [])
@@ -86,12 +101,17 @@ class SemanticStepTests(unittest.TestCase):
             "steps": [
                 {"type": "move_to_actor"},
                 {"type": "select_dialogue"},
+                {"type": "select_message_box"},
+                {"type": "select_message_box", "index": -1},
                 {"type": "assert_global", "expect": {"wat": 1}},
             ]
         }
         problems = qa_runner.validate(spec, Path(tempfile.gettempdir()))
         self.assertTrue(any("move_to_actor needs exactly one" in p for p in problems))
         self.assertTrue(any("select_dialogue needs exactly one" in p for p in problems))
+        self.assertTrue(any("select_message_box needs exactly one" in p for p in problems))
+        self.assertTrue(any("select_message_box `index` must be a non-negative" in p
+                            for p in problems))
         self.assertTrue(any("assert_global needs `editor_id`" in p for p in problems))
         self.assertTrue(any("unknown operator 'wat'" in p for p in problems))
 

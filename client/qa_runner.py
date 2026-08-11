@@ -317,6 +317,22 @@ class Runner:
             time.sleep(settle)
         return result
 
+    def step_select_message_box(self, step) -> dict:
+        result = retry_for_ok(
+            lambda: bridge.select_message_box(
+                step.get("text"), index=step.get("index"), message=step.get("message"),
+                timeout=step.get("timeout", 20.0)),
+            step.get("retry_for", 0), step.get("retry_interval", 1.0))
+        if not result.get("ok"):
+            available = result.get("available") or []
+            suffix = f"; available={available}" if available else ""
+            raise StepFailed(f"select-message-box failed after {result['attempts']} attempt(s): "
+                             f"{result.get('error')}{suffix}")
+        settle = step.get("settle", self.defaults.get("settle_seconds", 0))
+        if settle:
+            time.sleep(settle)
+        return result
+
     def step_assert_global(self, step) -> dict:
         editor_id = require(step, "editor_id")
         condition = require(step, "expect")
@@ -487,7 +503,7 @@ def require(step: dict, key: str):
 
 def describe(step: dict) -> str:
     kind = step.get("type", "?")
-    for key in ("cmd", "name", "form_id", "text", "info_form_id", "index", "editor_id",
+    for key in ("cmd", "name", "form_id", "message", "text", "info_form_id", "index", "editor_id",
                 "mod_name", "source", "message", "save", "seconds"):
         if key in step:
             return f"{kind}: {step[key]}"
@@ -501,6 +517,7 @@ def describe(step: dict) -> str:
 KNOWN_TYPES = {"install", "uninstall", "enable", "disable", "launch", "kill",
                "load_baseline", "console", "wait", "assert_state", "assert_global",
                "move_to_actor", "activate_actor", "select_dialogue", "close_dialogue",
+               "select_message_box",
                "handoff_user"}
 
 
@@ -550,6 +567,18 @@ def validate(spec: dict, base_dir: Path) -> list[str]:
                 if len(selectors) != 1:
                     problems.append(f"{where}: select_dialogue needs exactly one of "
                                     "`text`, `index`, or `info_form_id`")
+            if kind == "select_message_box":
+                selectors = [key for key in ("text", "index") if step.get(key) is not None]
+                if len(selectors) != 1:
+                    problems.append(f"{where}: select_message_box needs exactly one of "
+                                    "`text` or `index`")
+                elif selectors[0] == "text" and not step["text"]:
+                    problems.append(f"{where}: select_message_box `text` must not be empty")
+                elif selectors[0] == "index" and (isinstance(step["index"], bool) or
+                                                   not isinstance(step["index"], int) or
+                                                   step["index"] < 0):
+                    problems.append(f"{where}: select_message_box `index` must be a "
+                                    "non-negative integer")
             if kind == "assert_global":
                 if not step.get("editor_id"):
                     problems.append(f"{where}: assert_global needs `editor_id`")

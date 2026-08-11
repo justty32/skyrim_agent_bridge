@@ -123,6 +123,20 @@ def close_dialogue(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
     return _request("POST", "/dialogue/close", body={}, timeout=timeout)
 
 
+def select_message_box(text: str | None = None, *, index: int | None = None,
+                       message: str | None = None,
+                       timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """Select a visible modal button, optionally guarded by its exact message."""
+    body: dict = {}
+    if text is not None:
+        body["text"] = text
+    if index is not None:
+        body["index"] = index
+    if message is not None:
+        body["message"] = message
+    return _request("POST", "/messagebox/select", body=body, timeout=timeout)
+
+
 def global_value(editor_id: str, *, timeout: float = DEFAULT_TIMEOUT) -> dict:
     """Read a TESGlobal by EditorID without relying on console output."""
     query = urllib.parse.urlencode({"editor_id": editor_id})

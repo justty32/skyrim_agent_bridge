@@ -27,19 +27,21 @@ Code reuse, when it comes, goes the other way: lift the scene-walking routines i
 
 ## Status
 
-Version 0.6.0. The current-cell, loaded-actor, cross-cell, retry, and structured dialogue
-paths are runtime-verified.
+Version 0.7.0. The current-cell, loaded-actor, cross-cell, retry, and structured dialogue
+paths are runtime-verified. Structured MessageBox control is implemented and offline-tested;
+its live acceptance is pending.
 
 | Route | Runs on | Notes |
 |---|---|---|
 | `GET /ping` | socket thread | Liveness. Answers during load screens on purpose — lets the runner tell "process alive, game busy" from "process dead". |
-| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`. `loaded_actors` walks all four engine process lists, deduplicates them, and exposes cell/FormID/3D-loaded state. Player + game (including open dialogue and its options) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and at the main menu this can 503 while the task queue isn't draining — that's expected, use `/ping` for liveness. |
+| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`. `loaded_actors` walks all four engine process lists, deduplicates them, and exposes cell/FormID/3D-loaded state. Player + game (including dialogue and `game.message_box`) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and at the main menu this can 503 while the task queue isn't draining — that's expected, use `/ping` for liveness. |
 | `GET /global` | game thread | `?editor_id=...`; live TESGlobal value without parsing noisy console output. |
 | `POST /console` | game thread | `{"cmd": "...", "ref": "0x14"}`. `ref` is optional — it's the console's selected reference, for dotted commands. Output capture is one line and best-effort; see the pitfall below. |
 | `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","scope":"loaded","distance":128}` or `{"form_id":"0x02001234"}`. Exact name or stable runtime reference ID; `scope=loaded` searches Skyrim's actor process lists and movement can cross cells. |
 | `POST /actor/activate` | game thread | Same actor selector. Starts normal player dialogue once the actor is loaded in the player's current cell. |
 | `POST /dialogue/select` | game thread | Select one visible option by exactly one of `text`, zero-based `index`, or runtime `info_form_id`, through the Dialogue Menu's structured callback. |
 | `POST /dialogue/close` | game thread | Ends the active player dialogue. |
+| `POST /messagebox/select` | game thread | `{"text":"OK","message":"Done Writing"}` or `{"index":0}`. Selects one structured modal button; optional exact `message` guard prevents a changed modal from being clicked. |
 
 Loading a save is just `{"cmd": "load <save filename without extension>"}` — verified working
 from the main menu, so there's no separate autoload mechanism to build.
@@ -51,7 +53,7 @@ for full plugins, `0xFE000`+ for light ones), so it doubles as the FormID prefix
 
 Not built yet: `POST /screenshot`, `POST /input` — both deferred, see plan decision D6.
 
-### Backlog: structured MessageBox control
+### Structured MessageBox control (0.7.0; live acceptance pending)
 
 Observed live on 2026-08-11 while automating the ModForge navmesh P3 acceptance: after
 `coc WhiterunBanneredMare`, **ini Editor MCM** opened a modal with the text
@@ -62,19 +64,28 @@ Observed live on 2026-08-11 while automating the ModForge navmesh P3 acceptance:
 but the bridge could neither read its text/buttons nor dismiss it. The QA run therefore
 looked like a navmesh/AI failure until a human identified the modal on screen.
 
-Do **not** solve this with blind `xdotool` coordinates or a generic synthetic-input route.
-Extend the same structured, in-process pattern already used by dialogue:
+0.7.0 implements the same structured, in-process pattern already used by dialogue; it
+does not use `xdotool`, keyboard events, mouse coordinates, or a generic focused-window
+operation:
 
-- `GET /state` should expose `game.message_box` with `open`, message/title text when
-  available, and the visible buttons in display order.
-- Add `POST /messagebox/select`, accepting exactly one of button `text` or zero-based
-  `index`, and invoke the native MessageBox menu callback on the game thread.
-- Add client/MCP/runner equivalents and a wait predicate so a QA scenario can say
-  "dismiss `OK` when this exact modal appears" without racing startup.
-- Fail closed when the menu/text/button does not match; never click an arbitrary focused
-  window. Preserve the current dialogue APIs unchanged.
+- `GET /state` exposes `game.message_box` with `open`, `ready`, message text, and visible
+  buttons in display order. Skyrim's stock MessageBox has no separate title.
+- `POST /messagebox/select` accepts exactly one button `text` or zero-based `index`; an
+  optional exact `message` guard makes the read-and-select operation race-safe.
+- `select_message_box` exists in the Python client and qa.json runner, `qa_message_box`
+  in MCP, and the existing `qa_wait` / `assert_state` predicates can wait on any
+  `game.message_box` field.
+- Any missing Scaleform structure, message mismatch, missing/duplicate text, or bad index
+  fails closed and reports the visible choices.
 
-Acceptance: reproduce the `Done Writing` modal (or a deterministic test Message), prove
+The implementation discovers the active movie object by its `MessageButtons` array rather
+than assuming a particular root clip name, then dispatches the menu's registered native
+`buttonPress` callback. The field/callback contract comes from the reconstructed stock
+[`MessageBox.as`](https://github.com/Mardoxx/skyrimui/blob/master/src/messagebox/MessageBox.as)
+and CommonLibSSE-NG's `RE/M/MessageBoxMenu.h`; runtime acceptance still has to prove the
+effective UI stack exposes that contract.
+
+Remaining live acceptance: reproduce the `Done Writing` modal (or a deterministic test Message), prove
 state returns its button list, select `OK` by text and by index, observe
 `MessageBoxMenu` disappear and game time/actor movement resume, then rerun the existing
 dialogue and living-NPC regressions unchanged.

@@ -8,4 +8,5 @@ set(headers ${headers}
     src/State.h
     src/StateActors.h
     src/GameActions.h
+    src/MessageBox.h
 )

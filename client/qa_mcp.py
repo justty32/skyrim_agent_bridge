@@ -3,13 +3,14 @@
 
 Phase 2.2. Registered alongside houseCARL in ~/.claude.json.
 
-Eight tools, chosen by how often they get called rather than by what exists:
+Nine tools, chosen by how often they get called rather than by what exists:
 
   qa_status   is the game up, is the profile safe to edit
   qa_state    the /state snapshot — the thing assertions are written against
   qa_console  run a console command
   qa_actor    locate/move to/start dialogue with an actor by name or FormID
   qa_dialogue select or close structured dialogue
+  qa_message_box select a guarded modal button
   qa_global   read a TESGlobal by EditorID
   qa_wait     wait until structured game-state conditions become true
   qa_run      execute a qa.json and return the report
@@ -41,7 +42,7 @@ import mo2ctl
 import qa_runner
 
 SERVER_NAME = "skyrim-qa"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 INCLUDE_VALUES = ["nearby_actors", "cell_actors", "loaded_actors", "inventory", "quests", "plugins"]
@@ -159,6 +160,29 @@ TOOLS = [
                 "editor_id": {"type": "string"},
             },
             "required": ["editor_id"],
+        },
+    },
+    {
+        "name": "qa_message_box",
+        "description": (
+            "Select a visible Skyrim MessageBox button without keyboard/mouse input. "
+            "Read game.message_box from qa_state first. Provide exactly one of button "
+            "text or zero-based index; `message` is an optional exact guard that prevents "
+            "a different modal from being selected while waiting."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Exact visible button text."},
+                "index": {"type": "integer", "minimum": 0,
+                          "description": "Visible button index; use instead of text."},
+                "message": {"type": "string",
+                            "description": "Optional exact modal message guard."},
+                "retry_for": {"type": "number",
+                              "description": "Wait for the exact modal/button; default 0 seconds."},
+                "retry_interval": {"type": "number",
+                                   "description": "Seconds between retries; default 1."},
+            },
         },
     },
     {
@@ -342,6 +366,27 @@ def tool_qa_global(args: dict) -> dict:
     return result
 
 
+def tool_qa_message_box(args: dict) -> dict:
+    selectors = [key for key in ("text", "index") if args.get(key) is not None]
+    if len(selectors) != 1:
+        raise ToolError("provide exactly one of `text` or `index`")
+    if "text" in selectors and not args["text"]:
+        raise ToolError("`text` must not be empty")
+    if "index" in selectors and (isinstance(args["index"], bool) or
+                                 not isinstance(args["index"], int) or args["index"] < 0):
+        raise ToolError("`index` must be a non-negative integer")
+    result = qa_runner.retry_for_ok(
+        lambda: bridge.select_message_box(
+            args.get("text"), index=args.get("index"), message=args.get("message")),
+        args.get("retry_for", 0), args.get("retry_interval", 1.0))
+    if not result.get("ok"):
+        available = result.get("available") or []
+        suffix = f"; available={available}" if available else ""
+        raise ToolError(f"message box selection failed after {result['attempts']} attempt(s): "
+                        f"{result.get('error')}{suffix}")
+    return result
+
+
 def tool_qa_run(args: dict) -> dict:
     spec_path = Path(args["spec"]).expanduser()
     if not spec_path.is_absolute():
@@ -370,6 +415,7 @@ HANDLERS = {
     "qa_console": tool_qa_console,
     "qa_actor": tool_qa_actor,
     "qa_dialogue": tool_qa_dialogue,
+    "qa_message_box": tool_qa_message_box,
     "qa_global": tool_qa_global,
     "qa_wait": tool_qa_wait,
     "qa_run": tool_qa_run,

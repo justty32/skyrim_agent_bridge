@@ -9,8 +9,8 @@ contract, and a two-sided edit should be one commit.
 |---|---|---|
 | `mo2ctl.py` | ✅ verified end-to-end 2026-08-02 | Drive MO2 without its GUI: install / uninstall / enable / disable / launch / kill / status |
 | `bridge.py` | ✅ | Talking to the in-game HTTP bridge. Owns the port; everything else imports it |
-| `qa_runner.py` | ✅ 0.6.0 runtime-verified 2026-08-10 | Execute a `qa.json`, including retryable FormID/loaded-scope actor and structured dialogue steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
-| `qa_mcp.py` | ✅ 0.3.0 runtime-verified; client restart required to discover new tool schemas | MCP server: state, console, actor, dialogue, global, structured wait, and whole-run tools |
+| `qa_runner.py` | ✅ 0.6.0 runtime-verified; 0.7.0 MessageBox step offline-tested | Execute a `qa.json`, including retryable actor/dialogue/MessageBox steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
+| `qa_mcp.py` | ✅ 0.3.0 runtime-verified; 0.4.0 MessageBox tool offline-tested; client restart required to discover new tool schemas | MCP server: state, console, actor, dialogue, MessageBox, global, structured wait, and whole-run tools |
 
 stdlib only, no venv. This has to keep working while the rest of the toolchain is
 mid-rebuild, and a QA harness that needs its own install step before it can test
@@ -223,6 +223,7 @@ startup, so registering it mid-session does nothing for that session.
 | `qa_console` | run a console command |
 | `qa_actor` | move beside or start dialogue with an actor selected by name/runtime FormID and cell/loaded scope |
 | `qa_dialogue` | select a visible dialogue option by text/index/TopicInfo FormID, or close dialogue |
+| `qa_message_box` | select a visible modal button by text/index, optionally guarded by exact message text |
 | `qa_global` | read a TESGlobal by EditorID |
 | `qa_wait` | poll JSON-path conditions until asynchronous game state converges |
 | `qa_run` | execute a qa.json, return the report |

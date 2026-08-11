@@ -27,6 +27,15 @@ class SemanticRequestTests(unittest.TestCase):
             "POST", "/dialogue/select",
             body={"contains": False, "index": 2}, timeout=bridge.DEFAULT_TIMEOUT)
 
+    @patch("bridge._request")
+    def test_message_box_request_has_exact_message_guard(self, request):
+        request.return_value = {"ok": True}
+        bridge.select_message_box("OK", message="Done Writing")
+        request.assert_called_once_with(
+            "POST", "/messagebox/select",
+            body={"text": "OK", "message": "Done Writing"},
+            timeout=bridge.DEFAULT_TIMEOUT)
+
 
 if __name__ == "__main__":
     unittest.main()

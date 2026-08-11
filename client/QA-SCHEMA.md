@@ -39,6 +39,7 @@ Any step accepts `label` (what shows in the report), `comment` (ignored, for hum
 | `activate_actor` | `name` or `form_id`, `scope`, `retry_for`, `retry_interval`, `settle`, `timeout` | start normal dialogue after the actor is loaded in the current cell |
 | `select_dialogue` | `text` or `index` or `info_form_id`, `contains`, `retry_for`, `retry_interval`, `settle`, `timeout` | select one visible option; exact text by default |
 | `close_dialogue` | `settle`, `timeout` | end active player dialogue |
+| `select_message_box` | `text` or `index`, `message`, `retry_for`, `retry_interval`, `settle`, `timeout` | select one modal button; `message` is an optional exact guard |
 | `assert_global` | `editor_id`, `expect`, `retry_for`, `retry_interval`, `timeout` | compare a TESGlobal's structured runtime value |
 | `wait` | `seconds` | |
 | `assert_state` | `expect`, `include`, `radius`, `limit`, `retry_for`, `retry_interval` | see below |
@@ -65,7 +66,8 @@ Paths use `.` for object keys, `[N]` for one array element (negatives allowed) a
 for all of them. Ask for the optional blocks you reference via `include`
 (`nearby_actors`, `cell_actors`, `loaded_actors`, `inventory`, `quests`, `plugins`) — `player` and `game`
 are always there. `game.dialogue` always reports whether the menu is open, its speaker,
-and structured visible options.
+and structured visible options. `game.message_box` always reports `open`, `ready`, its
+message, and buttons in display order.
 
 The semantic interaction steps compose without any screen or desktop input:
 
@@ -89,6 +91,14 @@ reported by an actor block and let the action retry instead of inserting a fixed
   "retry_for": 20, "retry_interval": 1 },
 { "type": "activate_actor", "form_id": "0x02001234", "retry_for": 10 },
 { "type": "select_dialogue", "info_form_id": "0x02005678", "retry_for": 10 }
+```
+
+A guarded modal step retries until that exact message and button coexist, then performs
+one native menu selection:
+
+```jsonc
+{ "type": "select_message_box", "message": "Done Writing", "text": "OK",
+  "retry_for": 20, "retry_interval": 0.5 }
 ```
 
 Bare numeric FormIDs are accepted, but hex strings are easier to compare with console and

@@ -4,6 +4,7 @@
 #include "GameActions.h"
 #include "GameThread.h"
 #include "HttpServer.h"
+#include "MessageBox.h"
 #include "State.h"
 
 using json = nlohmann::json;
@@ -55,7 +56,7 @@ namespace {
         return Http::Response::Ok({
             { "ok", true },
             { "plugin", "AgentBridge" },
-            { "version", "0.6.0" },
+            { "version", "0.7.0" },
         });
     }
 
@@ -208,6 +209,29 @@ namespace {
         return result->value("ok", false) ? Http::Response::Ok(*result) : Http::Response{ 400, *result };
     }
 
+    Http::Response MessageBoxSelect(const Http::Request& req)
+    {
+        StructuredMessageBox::Selector selector;
+        try {
+            const auto body = json::parse(req.body.empty() ? "{}" : req.body);
+            selector.text = body.value("text", std::string{});
+            if (const auto it = body.find("index"); it != body.end() && it->is_number_unsigned()) {
+                selector.index = it->get<std::size_t>();
+            } else if (it != body.end() && it->is_number_integer() && it->get<std::int64_t>() >= 0) {
+                selector.index = static_cast<std::size_t>(it->get<std::int64_t>());
+            }
+            if (const auto it = body.find("message"); it != body.end()) {
+                if (!it->is_string()) throw std::invalid_argument("message must be a string");
+                selector.expectedMessage = it->get<std::string>();
+            }
+        } catch (const std::exception& e) {
+            return Http::Response::Error(400, std::string{ "bad JSON body: " } + e.what());
+        }
+        auto result = GameThread::Run([selector] { return StructuredMessageBox::Select(selector); });
+        if (!result) return Http::Response::Error(503, "game thread did not respond in time");
+        return result->value("ok", false) ? Http::Response::Ok(*result) : Http::Response{ 400, *result };
+    }
+
     Http::Response GlobalRead(const Http::Request& req)
     {
         const std::string editorID = req.Get("editor_id");
@@ -227,4 +251,5 @@ void Routes::Register()
     Http::Route("POST", "/actor/activate", ActorActivate);
     Http::Route("POST", "/dialogue/select", DialogueSelect);
     Http::Route("POST", "/dialogue/close", DialogueClose);
+    Http::Route("POST", "/messagebox/select", MessageBoxSelect);
 }
