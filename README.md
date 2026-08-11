@@ -51,6 +51,34 @@ for full plugins, `0xFE000`+ for light ones), so it doubles as the FormID prefix
 
 Not built yet: `POST /screenshot`, `POST /input` — both deferred, see plan decision D6.
 
+### Backlog: structured MessageBox control
+
+Observed live on 2026-08-11 while automating the ModForge navmesh P3 acceptance: after
+`coc WhiterunBanneredMare`, **ini Editor MCM** opened a modal with the text
+`Done Writing` and an `OK` button. The exact source is its loose
+`Scripts/Source/CustomIniEditorMCM.psc:45`: `OnUpdate()` calls
+`Debug.MessageBox("Done Writing")`. `GET /state` exposed only
+`game.menus_open: ["MessageBoxMenu", ...]`; the modal paused game time and every actor,
+but the bridge could neither read its text/buttons nor dismiss it. The QA run therefore
+looked like a navmesh/AI failure until a human identified the modal on screen.
+
+Do **not** solve this with blind `xdotool` coordinates or a generic synthetic-input route.
+Extend the same structured, in-process pattern already used by dialogue:
+
+- `GET /state` should expose `game.message_box` with `open`, message/title text when
+  available, and the visible buttons in display order.
+- Add `POST /messagebox/select`, accepting exactly one of button `text` or zero-based
+  `index`, and invoke the native MessageBox menu callback on the game thread.
+- Add client/MCP/runner equivalents and a wait predicate so a QA scenario can say
+  "dismiss `OK` when this exact modal appears" without racing startup.
+- Fail closed when the menu/text/button does not match; never click an arbitrary focused
+  window. Preserve the current dialogue APIs unchanged.
+
+Acceptance: reproduce the `Done Writing` modal (or a deterministic test Message), prove
+state returns its button list, select `OK` by text and by index, observe
+`MessageBoxMenu` disappear and game time/actor movement resume, then rerun the existing
+dialogue and living-NPC regressions unchanged.
+
 The semantic actor/dialogue path was verified end to end on 2026-08-10: enumerate the
 current cell, find and move beside Falas, start dialogue, read the displayed options,
 select parley by exact text, and observe its TopicInfo script change a TESGlobal from
