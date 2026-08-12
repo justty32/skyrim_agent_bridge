@@ -31,7 +31,7 @@ Any step accepts `label` (what shows in the report), `comment` (ignored, for hum
 | `install` | `source`, `mod_name`, `enable`, `version`, `comment` | `source` is a mod folder, a folder containing `Data/`, or a bare `.esp`; **relative to the qa.json**, not the shell's cwd |
 | `uninstall` | `mod_name`, `keep_files` | |
 | `enable` / `disable` | `mod_name` | |
-| `launch` | `wait`, `shortcut` | starts SKSE through MO2; waits for the bridge **and** the game thread |
+| `launch` | `wait`, `shortcut`, `background_active` | starts SKSE through MO2; waits for the bridge **and** the game thread; `background_active` defaults true and is restored by `kill` |
 | `kill` | `mo2`, `timeout` | `mo2: true` also closes MO2, which is what makes the profile writable |
 | `load_baseline` | `save`, `settle`, `timeout` | falls back to the top-level `baseline` |
 | `console` | `cmd`, `ref`, `settle`, `timeout` | `ref` is the console's selected reference, for dotted commands |

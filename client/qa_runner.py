@@ -220,7 +220,8 @@ class Runner:
         budget = step.get("wait", 240.0)
         started = time.time()
         result = _mo2(mo2ctl.cmd_launch, shortcut=step.get("shortcut", "SKSE"),
-                      wait=budget, no_wait=False)
+                      wait=budget, no_wait=False,
+                      background_active=step.get("background_active", True))
         if not result.get("bridge", {}).get("reachable"):
             raise StepFailed(f"bridge never answered: {result.get('bridge', {}).get('error')}")
 

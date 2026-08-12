@@ -32,7 +32,7 @@ anything is a harness you stop using.
 ./mo2ctl.py try-fail
 ./mo2ctl.py try-pass -m "Validate Mod Name"
 ./mo2ctl.py enable|disable <name>
-./mo2ctl.py launch [--wait 240]          # SKSE through MO2, waits for the bridge
+./mo2ctl.py launch [--wait 240] [--background-active]
 ./mo2ctl.py kill [--mo2]
 ```
 
@@ -168,6 +168,16 @@ if that entry is renamed.
 `bridge.reachable: false` instead of hanging. Observed cold start on this load order:
 16–30s.
 
+`--background-active` temporarily writes `bAlwaysActive=1` under `[General]` in the
+selected profile's `skyrim.ini`. This keeps Skyrim's game thread draining while its window
+is unfocused, which is required for a genuinely unattended main-menu `load` or `coc`.
+The exact original bytes are kept under the profile's ignored `.mo2ctl-backups/` folder;
+`mo2ctl kill` restores them, including when the game already exited, and the next launch
+recovers a stale backup before making a new one. `qa_runner` enables this mode by default.
+Live verification on 2026-08-12 kept Skyrim in the background from launch, read `/state`
+at the main menu, loaded the baseline into `WhiterunExterior15`, then restored an identical
+pre-launch `skyrim.ini` SHA-256 on kill.
+
 **`/ping` answering does not mean the game is ready.** `/ping` is served on the socket
 thread and keeps answering right through load screens — deliberately, so a runner can
 tell "process alive, game busy" from "process dead". The first `/state` after launch
@@ -175,6 +185,11 @@ reliably 503s with `game thread did not respond in time`. That cost the smoke te
 red run before `qa_runner`'s launch step learned to wait for `/state` as well. `mo2ctl
 launch` still stops at `/ping`, which is the right level for a process-control tool;
 anything that then asserts on state should do what the runner does.
+
+Without background-active mode, losing window focus pauses Skyrim's game thread on this
+host. A queued console request can first return a timeout and then execute when focus
+returns, so callers must not blindly resend a timed-out mutating command. The QA runner
+avoids that ambiguous state by keeping the engine active in the background.
 
 ## The cell name that wasn't
 

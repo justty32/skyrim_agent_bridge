@@ -14,6 +14,25 @@ class SemanticStepTests(unittest.TestCase):
     def setUp(self):
         self.runner = qa_runner.Runner({"defaults": {}}, Path.cwd(), interactive=False)
 
+    @patch("qa_runner.wait_for", return_value={"ok": True})
+    @patch("qa_runner._mo2")
+    def test_launch_keeps_game_thread_active_in_background_by_default(self, call_mo2, _wait):
+        call_mo2.return_value = {
+            "bridge": {"reachable": True},
+            "launched": True,
+        }
+
+        result = self.runner.step_launch({"type": "launch", "wait": 30})
+
+        self.assertTrue(result["launched"])
+        call_mo2.assert_called_once_with(
+            qa_runner.mo2ctl.cmd_launch,
+            shortcut="SKSE",
+            wait=30,
+            no_wait=False,
+            background_active=True,
+        )
+
     @patch("qa_runner.bridge.move_to_actor")
     def test_move_to_actor_uses_name_and_distance(self, move):
         move.return_value = {"ok": True, "actor": {"name": "Falas"}}

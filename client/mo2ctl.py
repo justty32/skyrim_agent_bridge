@@ -22,7 +22,7 @@ the rest of the toolchain is mid-rebuild.
   mo2ctl try-pass [-m MESSAGE]
   mo2ctl enable <name>
   mo2ctl disable <name>
-  mo2ctl launch [--wait SECONDS] [--no-wait]
+  mo2ctl launch [--wait SECONDS] [--no-wait] [--background-active]
   mo2ctl kill [--mo2]
 
 Everything that mutates MO2 state refuses to run while MO2 or the game is up; see
@@ -68,6 +68,7 @@ ENGINE_LOADORDER_CHURN = {
     "ccbgssse069-contest.esl",
     "ccvsvsse004-beafarmer.esl",
 }
+BACKGROUND_ACTIVE_BACKUP = "background-active-skyrim.ini"
 
 # Directory names that make a folder recognisable as a Skyrim `Data`-relative mod root.
 DATA_DIR_NAMES = {
@@ -194,6 +195,70 @@ def write_file(tf: TextFile, *, backup: bool = True) -> Path | None:
     text = tf.eol.join(tf.lines) + (tf.eol if tf.trailing_eol else "")
     tf.path.write_bytes(text.encode("utf-8"))
     return made
+
+
+def atomic_write(path: Path, data: bytes) -> None:
+    """Replace one file atomically, keeping temporary bytes on the same filesystem."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def background_active_backup(env: Env) -> Path:
+    return env.profile_dir / ".mo2ctl-backups" / BACKGROUND_ACTIVE_BACKUP
+
+
+def restore_background_active(env: Env) -> dict:
+    """Restore the exact pre-launch Skyrim.ini bytes after an unattended run."""
+    backup = background_active_backup(env)
+    if not backup.is_file():
+        return {"restored": False}
+    ini = env.profile_dir / "skyrim.ini"
+    atomic_write(ini, backup.read_bytes())
+    backup.unlink()
+    return {"restored": True, "path": str(ini)}
+
+
+def enable_background_active(env: Env) -> dict:
+    """Temporarily keep Skyrim's game thread alive while its window is unfocused."""
+    restore_background_active(env)  # recover an interrupted previous run first
+    ini = env.profile_dir / "skyrim.ini"
+    if not ini.is_file():
+        raise Fail(f"missing profile file: {ini}")
+    original = ini.read_bytes()
+    backup = background_active_backup(env)
+    atomic_write(backup, original)
+
+    tf = read_file(ini)
+    general = next((i for i, line in enumerate(tf.lines)
+                    if line.strip().casefold() == "[general]"), None)
+    if general is None:
+        tf.lines[0:0] = ["[General]", "bAlwaysActive=1"]
+    else:
+        end = next((i for i in range(general + 1, len(tf.lines))
+                    if tf.lines[i].strip().startswith("[")), len(tf.lines))
+        setting = next((i for i in range(general + 1, end)
+                        if tf.lines[i].partition("=")[0].strip().casefold()
+                        == "balwaysactive"), None)
+        if setting is None:
+            tf.lines.insert(general + 1, "bAlwaysActive=1")
+        else:
+            tf.lines[setting] = "bAlwaysActive=1"
+    text = tf.eol.join(tf.lines) + (tf.eol if tf.trailing_eol else "")
+    try:
+        atomic_write(ini, text.encode("utf-8"))
+    except Exception:
+        restore_background_active(env)
+        raise
+    return {"enabled": True, "path": str(ini), "backup": str(backup)}
 
 
 def utc_stamp() -> str:
@@ -1942,6 +2007,12 @@ def cmd_launch(env: Env, args) -> dict:
     if game_pids():
         raise Fail("Skyrim is already running (mo2ctl kill first)")
 
+    background_active = None
+    if getattr(args, "background_active", False):
+        if mo2_pids():
+            raise Fail("MO2 is already running (mo2ctl kill --mo2 first)")
+        background_active = enable_background_active(env)
+
     # protontricks-launch runs the exe inside app 489830's Proton prefix, which is
     # where MO2 itself lives — usvfs needs MO2 and the game in one wine session.
     # `moshortcut://:SKSE` is MO2's own name for the customExecutables entry, so
@@ -1951,12 +2022,19 @@ def cmd_launch(env: Env, args) -> dict:
         str(env.mo2_exe), f"moshortcut://:{args.shortcut}",
     ]
     log_path = Path(os.environ.get("MO2CTL_LOG_DIR", "/tmp")) / "mo2ctl-launch.log"
-    with open(log_path, "ab") as log:
-        log.write(f"\n=== {datetime.now():%Y-%m-%d %H:%M:%S} {' '.join(cmd)}\n".encode())
-        proc = subprocess.Popen(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-                                start_new_session=True)
+    try:
+        with open(log_path, "ab") as log:
+            log.write(f"\n=== {datetime.now():%Y-%m-%d %H:%M:%S} {' '.join(cmd)}\n".encode())
+            proc = subprocess.Popen(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                                    start_new_session=True)
+    except Exception:
+        if background_active:
+            restore_background_active(env)
+        raise
 
     result = {"launched": True, "pid": proc.pid, "shortcut": args.shortcut, "log": str(log_path)}
+    if background_active:
+        result["background_active"] = background_active
     if args.no_wait:
         return result
 
@@ -1970,10 +2048,14 @@ def cmd_launch(env: Env, args) -> dict:
         if proc.poll() is not None and not game_pids():
             result["bridge"] = {"reachable": False,
                                 "error": f"launcher exited with {proc.returncode} before the bridge came up"}
+            if background_active:
+                result["background_active_restore"] = restore_background_active(env)
             return result
         time.sleep(2)
 
     result["bridge"] = {"reachable": False, "error": f"no /ping within {args.wait}s"}
+    if background_active and not game_pids() and not mo2_pids():
+        result["background_active_restore"] = restore_background_active(env)
     return result
 
 
@@ -1982,7 +2064,8 @@ def cmd_kill(env: Env, args) -> dict:
     if args.mo2:
         targets += mo2_pids()
     if not targets:
-        return {"killed": [], "note": "nothing to kill"}
+        return {"killed": [], "note": "nothing to kill",
+                "background_active": restore_background_active(env)}
 
     for pid in targets:
         try:
@@ -1993,7 +2076,8 @@ def cmd_kill(env: Env, args) -> dict:
     deadline = time.monotonic() + args.timeout
     while time.monotonic() < deadline:
         if not [p for p in targets if Path(f"/proc/{p}").exists()]:
-            return {"killed": targets, "escalated": []}
+            return {"killed": targets, "escalated": [],
+                    "background_active": restore_background_active(env)}
         time.sleep(0.5)
 
     escalated = []
@@ -2004,7 +2088,8 @@ def cmd_kill(env: Env, args) -> dict:
                 escalated.append(pid)
             except ProcessLookupError:
                 pass
-    return {"killed": targets, "escalated": escalated}
+    return {"killed": targets, "escalated": escalated,
+            "background_active": restore_background_active(env)}
 
 
 def require_writable(args) -> None:
@@ -2135,6 +2220,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--shortcut", default="SKSE", help="MO2 customExecutables title (default: SKSE)")
     s.add_argument("--wait", type=float, default=180.0, help="seconds to wait for the bridge (default: 180)")
     s.add_argument("--no-wait", action="store_true", help="return as soon as the launcher is spawned")
+    s.add_argument("--background-active", action="store_true",
+                   help="temporarily set bAlwaysActive=1; `kill` restores Skyrim.ini")
     s.set_defaults(func=cmd_launch)
 
     s = sub_add("kill", "terminate the game")

@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mo2ctl
@@ -365,6 +366,105 @@ class Mo2CtlProfileGitTests(unittest.TestCase):
         self.assertEqual(result["eol"], "CRLF")
         self.assertIn(b"selected_profile=@ByteArray(QA)\r\n", raw)
         self.assertEqual(raw.count(b"selected_profile="), 1)
+
+
+class Mo2CtlBackgroundActiveTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "mo2"
+        self.profile = self.root / "profiles" / "QA"
+        self.profile.mkdir(parents=True)
+        self.env = mo2ctl.Env(self.root, "QA")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def write_ini(self, data: bytes) -> None:
+        (self.profile / "skyrim.ini").write_bytes(data)
+
+    def test_enable_and_restore_preserve_exact_original_bytes(self) -> None:
+        original = b"[General]\r\nsLanguage=ENGLISH\r\n[Display]\r\nbAllowScreenshot=1\r\n"
+        self.write_ini(original)
+
+        enabled = mo2ctl.enable_background_active(self.env)
+
+        self.assertTrue(enabled["enabled"])
+        active = (self.profile / "skyrim.ini").read_bytes()
+        self.assertIn(b"[General]\r\nbAlwaysActive=1\r\n", active)
+        self.assertNotIn(b"\n", active.replace(b"\r\n", b""))
+        restored = mo2ctl.restore_background_active(self.env)
+        self.assertTrue(restored["restored"])
+        self.assertEqual((self.profile / "skyrim.ini").read_bytes(), original)
+        self.assertFalse(mo2ctl.background_active_backup(self.env).exists())
+
+    def test_existing_setting_is_temporarily_overridden(self) -> None:
+        original = b"[General]\nbAlwaysActive=0\nsLanguage=ENGLISH\n"
+        self.write_ini(original)
+
+        mo2ctl.enable_background_active(self.env)
+
+        self.assertEqual(
+            (self.profile / "skyrim.ini").read_bytes(),
+            b"[General]\nbAlwaysActive=1\nsLanguage=ENGLISH\n",
+        )
+        mo2ctl.restore_background_active(self.env)
+        self.assertEqual((self.profile / "skyrim.ini").read_bytes(), original)
+
+    def test_missing_general_section_is_created_temporarily(self) -> None:
+        original = b"[Display]\nbAllowScreenshot=1\n"
+        self.write_ini(original)
+
+        mo2ctl.enable_background_active(self.env)
+
+        self.assertTrue(
+            (self.profile / "skyrim.ini").read_bytes().startswith(
+                b"[General]\nbAlwaysActive=1\n[Display]\n"
+            )
+        )
+        mo2ctl.restore_background_active(self.env)
+        self.assertEqual((self.profile / "skyrim.ini").read_bytes(), original)
+
+    def test_stale_backup_is_recovered_before_next_enable(self) -> None:
+        first = b"[General]\nbAlwaysActive=0\n"
+        self.write_ini(first)
+        mo2ctl.enable_background_active(self.env)
+        (self.profile / "skyrim.ini").write_bytes(b"corrupt interrupted run\n")
+
+        mo2ctl.enable_background_active(self.env)
+        mo2ctl.restore_background_active(self.env)
+
+        self.assertEqual((self.profile / "skyrim.ini").read_bytes(), first)
+
+    @patch("mo2ctl.game_pids", return_value=[])
+    def test_kill_restores_even_when_process_already_exited(self, _game_pids) -> None:
+        original = b"[General]\nbAlwaysActive=0\n"
+        self.write_ini(original)
+        mo2ctl.enable_background_active(self.env)
+
+        result = mo2ctl.cmd_kill(
+            self.env, argparse.Namespace(mo2=False, timeout=0),
+        )
+
+        self.assertTrue(result["background_active"]["restored"])
+        self.assertEqual((self.profile / "skyrim.ini").read_bytes(), original)
+
+    @patch("mo2ctl.mo2_pids", return_value=[])
+    @patch("mo2ctl.game_pids", return_value=[])
+    @patch("mo2ctl.subprocess.Popen", side_effect=OSError("spawn failed"))
+    def test_launch_spawn_failure_restores_original(
+        self, _popen, _game_pids, _mo2_pids,
+    ) -> None:
+        original = b"[General]\nbAlwaysActive=0\n"
+        self.write_ini(original)
+        args = argparse.Namespace(
+            shortcut="SKSE", wait=1, no_wait=False, background_active=True,
+        )
+
+        with self.assertRaisesRegex(OSError, "spawn failed"):
+            mo2ctl.cmd_launch(self.env, args)
+
+        self.assertEqual((self.profile / "skyrim.ini").read_bytes(), original)
+        self.assertFalse(mo2ctl.background_active_backup(self.env).exists())
 
 
 class Mo2CtlStaticGateTests(unittest.TestCase):

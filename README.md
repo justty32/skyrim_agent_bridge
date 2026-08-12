@@ -33,7 +33,7 @@ structured MessageBox paths are runtime-verified.
 | Route | Runs on | Notes |
 |---|---|---|
 | `GET /ping` | socket thread | Liveness. Answers during load screens on purpose — lets the runner tell "process alive, game busy" from "process dead". |
-| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`. `loaded_actors` walks all four engine process lists, deduplicates them, and exposes cell/FormID/3D-loaded state. Player + game (including dialogue and `game.message_box`) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and at the main menu this can 503 while the task queue isn't draining — that's expected, use `/ping` for liveness. |
+| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`. `loaded_actors` walks all four engine process lists, deduplicates them, and exposes cell/FormID/3D-loaded state. Player + game (including dialogue and `game.message_box`) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and a paused/unfocused game can 503 while the task queue isn't draining — use `/ping` for liveness or launch the client with background-active mode. |
 | `GET /global` | game thread | `?editor_id=...`; live TESGlobal value without parsing noisy console output. |
 | `POST /console` | game thread | `{"cmd": "...", "ref": "0x14"}`. `ref` is optional — it's the console's selected reference, for dotted commands. Output capture is one line and best-effort; see the pitfall below. |
 | `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","scope":"loaded","distance":128}` or `{"form_id":"0x02001234"}`. Exact name or stable runtime reference ID; `scope=loaded` searches Skyrim's actor process lists and movement can cross cells. |
@@ -42,8 +42,9 @@ structured MessageBox paths are runtime-verified.
 | `POST /dialogue/close` | game thread | Ends the active player dialogue. |
 | `POST /messagebox/select` | game thread | `{"text":"OK","message":"Done Writing"}` or `{"index":0}`. Selects one structured modal button; optional exact `message` guard prevents a changed modal from being clicked. |
 
-Loading a save is just `{"cmd": "load <save filename without extension>"}` — verified working
-from the main menu, so there's no separate autoload mechanism to build.
+Loading a save is just `{"cmd": "load <save filename without extension>"}`. It is verified
+from an unfocused main menu when `mo2ctl launch --background-active` temporarily enables Skyrim's
+`bAlwaysActive`; `qa_runner` does this by default and restores the original INI on kill.
 
 `include=plugins` returns the load order **as the engine resolved it**, which is the
 thing to assert against after installing a mod — `plugins.txt` says what was asked for,
