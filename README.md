@@ -27,9 +27,8 @@ Code reuse, when it comes, goes the other way: lift the scene-walking routines i
 
 ## Status
 
-Version 0.7.0. The current-cell, loaded-actor, cross-cell, retry, and structured dialogue
-paths are runtime-verified. Structured MessageBox control is implemented and offline-tested;
-its live acceptance is pending.
+Version 0.7.0. The current-cell, loaded-actor, cross-cell, retry, structured dialogue, and
+structured MessageBox paths are runtime-verified.
 
 | Route | Runs on | Notes |
 |---|---|---|
@@ -53,7 +52,7 @@ for full plugins, `0xFE000`+ for light ones), so it doubles as the FormID prefix
 
 Not built yet: `POST /screenshot`, `POST /input` — both deferred, see plan decision D6.
 
-### Structured MessageBox control (0.7.0; live acceptance pending)
+### Structured MessageBox control (0.7.0; live-verified 2026-08-12)
 
 Observed live on 2026-08-11 while automating the ModForge navmesh P3 acceptance: after
 `coc WhiterunBanneredMare`, **ini Editor MCM** opened a modal with the text
@@ -82,13 +81,16 @@ The implementation discovers the active movie object by its `MessageButtons` arr
 than assuming a particular root clip name, then dispatches the menu's registered native
 `buttonPress` callback. The field/callback contract comes from the reconstructed stock
 [`MessageBox.as`](https://github.com/Mardoxx/skyrimui/blob/master/src/messagebox/MessageBox.as)
-and CommonLibSSE-NG's `RE/M/MessageBoxMenu.h`; runtime acceptance still has to prove the
-effective UI stack exposes that contract.
+and CommonLibSSE-NG's `RE/M/MessageBoxMenu.h`. The 2026-08-12 acceptance below proved the
+deployed SkyUI/Extended Vanilla Menus stack exposes that contract.
 
-Remaining live acceptance: reproduce the `Done Writing` modal (or a deterministic test Message), prove
-state returns its button list, select `OK` by text and by index, observe
-`MessageBoxMenu` disappear and game time/actor movement resume, then rerun the existing
-dialogue and living-NPC regressions unchanged.
+Live acceptance reset `CustomIniEditorMCMQuest`, asked SkyUI to re-register its MCMs, and
+reproduced the exact `Done Writing` modal deterministically. `/state` returned
+`ready: true` and one `{index: 0, text: "OK"}` button. A deliberately wrong message guard
+failed closed without dismissing it; selecting `OK` by exact text dismissed it and game
+time resumed; a second reproduction dismissed by index 0. The existing generic
+living-NPC/dialogue regression then passed 31/31 unchanged, including selecting Falas's
+parley line and observing its TopicInfo script change favor from 0 to 5.
 
 The semantic actor/dialogue path was verified end to end on 2026-08-10: enumerate the
 current cell, find and move beside Falas, start dialogue, read the displayed options,
