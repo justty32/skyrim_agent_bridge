@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 # Project name = the SKSE .dll file name.
-project(AgentBridge VERSION 0.7.0 LANGUAGES CXX)
+project(AgentBridge VERSION 0.8.0 LANGUAGES CXX)
 
 # Optional auto-deploy: set SKYRIM_FOLDER (loose) or SKYRIM_MODS_FOLDER (MO2/Vortex)
 # and the post-build step copies the .dll into place. Left unset on offline/CI.
@@ -23,6 +23,9 @@ include(cmake/sourcelist.cmake)
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES ${headers} ${sources})
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    AGENT_BRIDGE_VERSION="${PROJECT_VERSION}"
+)
 target_precompile_headers(${PROJECT_NAME} PRIVATE src/PCH.h)
 
 # ws2_32: the bridge's whole point is a listening socket inside the game

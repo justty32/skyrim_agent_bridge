@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 // Building the /state snapshot.
 //
@@ -8,6 +9,11 @@
 // and because it is the only place in the plugin that reads broadly across the
 // engine — worth keeping the transport and the route table free of it.
 namespace State {
+    // Monotonic process-local proof that SKSE delivered a successful
+    // kPostLoadGame after the runner sent its load command. The runner compares
+    // before/after epochs so an already-matching cell cannot fake a load.
+    std::uint64_t NotifySaveLoaded() noexcept;
+
     // Player + game blocks are always included: they are small, always
     // available, and are what assertions are actually written against. The
     // expensive blocks are opt-in per request — a full inventory or the quest

@@ -27,13 +27,15 @@ Code reuse, when it comes, goes the other way: lift the scene-walking routines i
 
 ## Status
 
-Version 0.7.0. The current-cell, loaded-actor, cross-cell, retry, structured dialogue, and
-structured MessageBox paths are runtime-verified.
+Version 0.8.0 source and deployment. The current-cell, loaded-actor, cross-cell, retry,
+structured dialogue, structured MessageBox, and manifest + load-epoch baseline paths are
+runtime-verified. The 2026-08-16 Dev acceptance matched the exact external-manifest save
+pair, advanced load epoch `0 -> 1`, matched the full state fingerprint, and passed 4/4.
 
 | Route | Runs on | Notes |
 |---|---|---|
 | `GET /ping` | socket thread | Liveness. Answers during load screens on purpose — lets the runner tell "process alive, game busy" from "process dead". |
-| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`. `loaded_actors` walks all four engine process lists, deduplicates them, and exposes cell/FormID/3D-loaded state. Player + game (including dialogue and `game.message_box`) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and a paused/unfocused game can 503 while the task queue isn't draining — use `/ping` for liveness or launch the client with background-active mode. |
+| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`. `loaded_actors` walks all four engine process lists, deduplicates them, and exposes cell/FormID/3D-loaded state. Player + game (including dialogue, `game.message_box`, and the successful-save-load `game.load_epoch`) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and a paused/unfocused game can 503 while the task queue isn't draining — use `/ping` for liveness or launch the client with background-active mode. |
 | `GET /global` | game thread | `?editor_id=...`; live TESGlobal value without parsing noisy console output. |
 | `POST /console` | game thread | `{"cmd": "...", "ref": "0x14"}`. `ref` is optional — it's the console's selected reference, for dotted commands. Output capture is one line and best-effort; see the pitfall below. |
 | `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","scope":"loaded","distance":128}` or `{"form_id":"0x02001234"}`. Exact name or stable runtime reference ID; `scope=loaded` searches Skyrim's actor process lists and movement can cross cells. |
@@ -42,9 +44,39 @@ structured MessageBox paths are runtime-verified.
 | `POST /dialogue/close` | game thread | Ends the active player dialogue. |
 | `POST /messagebox/select` | game thread | `{"text":"OK","message":"Done Writing"}` or `{"index":0}`. Selects one structured modal button; optional exact `message` guard prevents a changed modal from being clicked. |
 
-Loading a save is just `{"cmd": "load <save filename without extension>"}`. It is verified
-from an unfocused main menu when `mo2ctl launch --background-active` temporarily enables Skyrim's
-`bAlwaysActive`; `qa_runner` does this by default and restores the original INI on kill.
+The raw API loads a save with `{"cmd": "load <save filename without extension>"}`. The QA
+runner does not treat acceptance of that asynchronous command as proof that the save
+loaded: `load_baseline` first verifies a deployment-owned manifest's exact `.ess`/`.skse`
+pair and SHA-256 values, proves the pair is in the selected MO2 profile's local-saves
+directory, records `game.load_epoch`, then requires that epoch to advance and polls
+`/state` for its player/cell/interior/dead and closed MessageBox fingerprint. It was
+previously verified from an unfocused main menu when
+`mo2ctl launch --background-active` temporarily enables Skyrim's `bAlwaysActive`;
+`qa_runner` does this by default and restores the original INI on kill.
+
+### 0.8.0 live acceptance and `kPostLoadGame` payload pitfall (2026-08-16)
+
+The first deployment exposed an incorrect assumption in the new epoch hook. SKSE's save
+hook sends the post-load result as scalar `(void*)result` with `dataLen == 1`; it is not a
+pointer to a readable `bool`. Dereferencing success value `1` therefore crashed at address
+`0x1` during `kPostLoadGame`. The handler now converts `data` to `uintptr_t` and advances
+the epoch only when the length is exactly `sizeof(bool)` and the scalar value is `1`.
+Compile-time checks cover success, failure, malformed value, and malformed length. The
+dispatch contract is visible in upstream
+[`skse64/Hooks_SaveLoad.cpp`](https://github.com/ianpatt/skse64/blob/master/skse64/Hooks_SaveLoad.cpp).
+
+The repaired DLL's SHA-256 is
+`be09f146a2771f5c6e84f21be2f2bd3191eecaa8b685836ea751af04eb152051`.
+The external `ModpackKRDev0A` manifest preflight and live spec then passed 4/4 in 20.8s:
+`/ping` reported `0.8.0`, the exact `.ess`/`.skse` pair matched, load epoch advanced
+`0 -> 1`, the declared player/cell/interior/dead/MessageBox fingerprint matched, and both
+asserted runtime plugins were present. `/ping` now receives its version from CMake's
+`PROJECT_VERSION`, avoiding a second hard-coded version.
+
+One timing nuance remains: `Done Writing` may be posted after the immediate post-load
+fingerprint already observed a closed MessageBox. The exact-message bridge guard can
+dismiss it, but a QA spec that promises no delayed modal needs an explicit observation
+window after load; the epoch proof alone makes no such promise.
 
 `include=plugins` returns the load order **as the engine resolved it**, which is the
 thing to assert against after installing a mod — `plugins.txt` says what was asked for,
@@ -230,7 +262,7 @@ through Windows CI. Iteration speed wins.
 Requires `xwin` splatted to `~/.xwin-cache` and `VCPKG_ROOT` set:
 
 ```bash
-export VCPKG_ROOT="$HOME/vcpkg" && cmake --preset build-release-clang-cl-linux && cmake --build build/release-clang-cl-linux
+export VCPKG_ROOT="$HOME/dev/vcpkg" && cmake --preset build-release-clang-cl-linux && cmake --build build/release-clang-cl-linux
 ```
 
 Output: `build/release-clang-cl-linux/AgentBridge.dll`.

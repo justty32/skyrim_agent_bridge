@@ -699,13 +699,60 @@ def normalize_load_order_warnings(text: str) -> list[str]:
     return warnings
 
 
-def skse_diagnostics(text: str) -> list[str]:
+def skse_diagnostics(text: str) -> tuple[list[str], list[str]]:
     diagnostics = []
+    incomplete = []
+    section = None
+    expected = None
+    seen = 0
+
+    def finish_section() -> None:
+        nonlocal section, expected, seen
+        if section is not None and expected is not None and seen != expected:
+            incomplete.append(f"{section}: rendered {seen} of {expected} diagnostic item(s)")
+        section = None
+        expected = None
+        seen = 0
+
     for line in text.splitlines():
+        clean = line.strip()
         lowered = line.lower()
-        if "contested" in lowered or "version-locked" in lowered or "locked to" in lowered:
-            diagnostics.append(line.strip())
-    return sorted(set(diagnostics))
+        locked_header = re.match(
+            r"^\[!\]\s+version-locked plugins\s+\((\d+)\)", clean,
+            flags=re.IGNORECASE,
+        )
+        contested_header = re.match(
+            r"^contested dlls\s+.*\((\d+)\):$", clean,
+            flags=re.IGNORECASE,
+        )
+        if locked_header:
+            finish_section()
+            section = "version-locked"
+            expected = int(locked_header.group(1))
+            continue
+        if contested_header:
+            finish_section()
+            section = "contested"
+            expected = int(contested_header.group(1))
+            continue
+        if not clean:
+            finish_section()
+            continue
+        if section and clean.startswith("- "):
+            diagnostics.append(f"{section}: {clean[2:]}")
+            seen += 1
+            continue
+        if section and clean.startswith("... [showing "):
+            incomplete.append(f"{section}: {clean}")
+            continue
+        # Retain compatibility with older/compact houseCARL output while avoiding
+        # aggregate lines such as `compat: 73 Address Library ... 5 version-LOCKED`.
+        if (lowered.strip().startswith("contested dll:") or
+                lowered.strip().startswith("version-locked dll:") or
+                " locked to " in f" {lowered.strip()} "):
+            diagnostics.append(clean)
+    finish_section()
+    return sorted(set(diagnostics)), sorted(set(incomplete))
 
 
 def regex_count(pattern: str, text: str) -> int | None:
@@ -755,9 +802,12 @@ def classify_static_result(current: dict, baseline: dict | None = None) -> dict:
             status = "fail"
             findings.append(f"missing masters: {missing}")
     elif tool == "housecarl_skse_inventory":
-        diagnostics = skse_diagnostics(text)
-        base_diagnostics = skse_diagnostics(base_text) if baseline else []
-        if not baseline:
+        diagnostics, incomplete = skse_diagnostics(text)
+        base_diagnostics, _base_incomplete = skse_diagnostics(base_text) if baseline else ([], [])
+        if incomplete:
+            status = "fail"
+            findings.extend(f"SKSE diagnostic inventory incomplete: {item}" for item in incomplete)
+        elif not baseline:
             if diagnostics:
                 status = "warn"
                 findings.append("SKSE diagnostics present; use a baseline to distinguish existing contested/locked DLLs")

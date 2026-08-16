@@ -508,6 +508,65 @@ class Mo2CtlStaticGateTests(unittest.TestCase):
         self.assertEqual(evaluated["status"], "fail")
         self.assertIn("PapyrusUtil.dll", evaluated["gates"][0]["findings"][0])
 
+    def test_skse_gate_ignores_aggregate_count_change_when_diagnostics_match(self) -> None:
+        locked = (
+            "[!] version-LOCKED plugins (1) — load ONLY on their listed runtime(s):\n"
+            "  - Existing.dll → 1.6.1170\n\n"
+            "contested DLLs (shipped by >1 mod — winner-first conflict chain):\n"
+            "  - ExistingConflict.dll: Winner (loose) › Loser (loose)\n"
+        )
+        base = self.capture(self.result(
+            "housecarl_skse_inventory",
+            "compat: 72 Address Library · 0 signature-scanning · 1 version-LOCKED\n\n"
+            + locked,
+        ))
+        current = self.capture(self.result(
+            "housecarl_skse_inventory",
+            "compat: 73 Address Library · 0 signature-scanning · 1 version-LOCKED\n\n"
+            + locked,
+        ))
+
+        evaluated = mo2ctl.evaluate_static_gates(current, base)
+
+        self.assertEqual(evaluated["status"], "pass")
+
+    def test_skse_gate_fails_on_new_locked_plugin_item(self) -> None:
+        base = self.capture(self.result(
+            "housecarl_skse_inventory",
+            "[!] version-LOCKED plugins (1) — details:\n"
+            "  - Existing.dll → 1.6.1170\n",
+        ))
+        current = self.capture(self.result(
+            "housecarl_skse_inventory",
+            "[!] version-LOCKED plugins (2) — details:\n"
+            "  - Existing.dll → 1.6.1170\n"
+            "  - NewRisk.dll → 1.6.640\n",
+        ))
+
+        evaluated = mo2ctl.evaluate_static_gates(current, base)
+
+        self.assertEqual(evaluated["status"], "fail")
+        self.assertEqual(
+            evaluated["gates"][0]["findings"],
+            ["version-locked: NewRisk.dll → 1.6.640"],
+        )
+
+    def test_skse_gate_fails_closed_on_capped_diagnostic_section(self) -> None:
+        truncated = self.capture(self.result(
+            "housecarl_skse_inventory",
+            "[!] version-LOCKED plugins (2) — details:\n"
+            "  - Existing.dll → 1.6.1170\n"
+            "  ... [showing 1 of 2; raise max_chars or use filter= to see all]\n",
+        ))
+
+        evaluated = mo2ctl.evaluate_static_gates(truncated, truncated)
+
+        self.assertEqual(evaluated["status"], "fail")
+        self.assertTrue(any(
+            "SKSE diagnostic inventory incomplete" in finding
+            for finding in evaluated["gates"][0]["findings"]
+        ))
+
     def test_check_errors_missing_master_increase_fails(self) -> None:
         base = self.capture(self.result(
             "housecarl_check_errors",

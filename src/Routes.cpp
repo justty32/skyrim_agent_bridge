@@ -9,6 +9,10 @@
 
 using json = nlohmann::json;
 
+#ifndef AGENT_BRIDGE_VERSION
+#error "AGENT_BRIDGE_VERSION must come from the CMake project version"
+#endif
+
 namespace {
     // "0x14" / "14" / "0X14" -> 0x14. Returns 0 on anything unparseable, which
     // the caller treats as "no target" rather than an error — a bad ref should
@@ -56,7 +60,7 @@ namespace {
         return Http::Response::Ok({
             { "ok", true },
             { "plugin", "AgentBridge" },
-            { "version", "0.7.0" },
+            { "version", AGENT_BRIDGE_VERSION },
         });
     }
 

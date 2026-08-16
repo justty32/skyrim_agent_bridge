@@ -9,7 +9,7 @@ contract, and a two-sided edit should be one commit.
 |---|---|---|
 | `mo2ctl.py` | ✅ verified end-to-end 2026-08-02 | Drive MO2 without its GUI: install / uninstall / enable / disable / launch / kill / status |
 | `bridge.py` | ✅ | Talking to the in-game HTTP bridge. Owns the port; everything else imports it |
-| `qa_runner.py` | ✅ 0.6.0 runtime-verified; 0.7.0 MessageBox step offline-tested | Execute a `qa.json`, including retryable actor/dialogue/MessageBox steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
+| `qa_runner.py` | ✅ semantic paths and baseline manifest/fingerprint gate runtime-verified | Execute a `qa.json`, including fail-closed baseline loading and retryable actor/dialogue/MessageBox steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
 | `qa_mcp.py` | ✅ 0.3.0 runtime-verified; 0.4.0 MessageBox tool offline-tested; client restart required to discover new tool schemas | MCP server: state, console, actor, dialogue, MessageBox, global, structured wait, and whole-run tools |
 
 stdlib only, no venv. This has to keep working while the rest of the toolchain is
@@ -122,6 +122,22 @@ loop you can only run once.
 ```
 
 It found a real bug on its first full run — see "the cell name that wasn't" below.
+
+Current source deliberately tightens the historical run above: `load_baseline` no longer
+counts `POST /console` plus a fixed settle delay as success. A qa.json must reference an
+external `baseline-manifest-v1` through top-level `baseline.manifest`. The runner verifies
+the manifest's exact `.ess`/`.skse` sizes and SHA-256 values and binds that directory to
+the selected MO2 profile's local-saves directory before sending `load`, then polls `/state`
+until `game.load_epoch` advances and the declared
+player/cell/interior/dead/closed-MessageBox fingerprint matches. The manifest must live
+below the deployment-set `QA_BASELINE_MANIFEST_ROOT`. See
+[QA-SCHEMA.md](QA-SCHEMA.md#baseline-manifest-and-load-proof) for the contract and the
+repository examples; deployment supplies its own trusted-root manifest and profile lane.
+
+The deployment-side lane was accepted on 2026-08-16: an external manifest under the
+configured trusted root matched the exact `ModpackKRDev0A` `.ess`/`.skse` pair, `/ping`
+reported AgentBridge 0.8.0, `game.load_epoch` advanced from 0 to 1, and the complete
+declared state fingerprint matched. The four-step live spec passed in 20.8 seconds.
 
 ## Three things that are not obvious
 

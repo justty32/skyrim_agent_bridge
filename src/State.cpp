@@ -3,12 +3,15 @@
 #include "MessageBox.h"
 
 #include <algorithm>
+#include <atomic>
 #include <string>
 #include <vector>
 
 using json = nlohmann::json;
 
 namespace {
+    std::atomic<std::uint64_t> g_loadEpoch{ 0 };
+
     // Every name in here can be null — GetName() on a form with no FULL record
     // returns "" or nullptr depending on the type, and a null into nlohmann is
     // a JSON null, which then breaks a runner doing a string compare. Always ""
@@ -73,6 +76,7 @@ namespace {
     json GameBlock()
     {
         json block = json::object();
+        block["load_epoch"] = g_loadEpoch.load(std::memory_order_relaxed);
 
         if (auto* calendar = RE::Calendar::GetSingleton()) {
             block["time"] = {
@@ -200,6 +204,11 @@ namespace {
         }
         return out;
     }
+}
+
+std::uint64_t State::NotifySaveLoaded() noexcept
+{
+    return g_loadEpoch.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
 json State::Snapshot(const Options& a_options)

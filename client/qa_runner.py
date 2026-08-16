@@ -16,7 +16,11 @@ Schema: QA-SCHEMA.md.
 from __future__ import annotations
 
 import argparse
+import configparser
+import hashlib
 import json
+import math
+import os
 import re
 import sys
 import time
@@ -37,6 +41,399 @@ class StepFailed(Exception):
     def __init__(self, message: str, failures: list | None = None):
         super().__init__(message)
         self.failures = failures or []
+
+
+# ---------------------------------------------------------------------------
+# Baseline manifest and runtime fingerprint
+# ---------------------------------------------------------------------------
+
+BASELINE_FORMAT = "baseline-manifest-v1"
+BASELINE_TRUSTED_ROOT_ENV = "QA_BASELINE_MANIFEST_ROOT"
+BASELINE_EXTENSIONS = {".ess", ".skse"}
+BASELINE_SIGNATURE_FIELDS = {
+    "player.name",
+    "player.cell_form_id",
+    "player.interior",
+    "player.flags.dead",
+    "game.message_box.open",
+}
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+_SAVE_STEM = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _manifest_path(spec: dict, base_dir: Path) -> Path:
+    baseline = spec.get("baseline")
+    if isinstance(baseline, str):
+        raise ConfigError(
+            "top-level `baseline` as a save-name string is no longer sufficient; "
+            "replace it with `baseline: {\"manifest\": \"/path/to/baseline-manifest.json\"}`"
+        )
+    if not isinstance(baseline, dict) or not baseline.get("manifest"):
+        raise ConfigError(
+            "load_baseline requires top-level `baseline.manifest`; unverified save loads "
+            "are not allowed"
+        )
+    value = baseline["manifest"]
+    if not isinstance(value, str):
+        raise ConfigError("top-level `baseline.manifest` must be a path string")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ConfigError("top-level `baseline.manifest` must be an absolute external path")
+    trusted_value = os.environ.get(BASELINE_TRUSTED_ROOT_ENV)
+    if not trusted_value:
+        raise ConfigError(
+            f"{BASELINE_TRUSTED_ROOT_ENV} must name the deployment-owned manifest root"
+        )
+    trusted_root = Path(trusted_value).expanduser()
+    if not trusted_root.is_absolute():
+        raise ConfigError(f"{BASELINE_TRUSTED_ROOT_ENV} must be absolute")
+    try:
+        resolved_path = path.resolve()
+        resolved_root = trusted_root.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ConfigError(f"cannot resolve baseline manifest trust path: {exc}") from exc
+    if resolved_path == resolved_root or resolved_root not in resolved_path.parents:
+        raise ConfigError(
+            f"baseline.manifest {resolved_path} is outside trusted root {resolved_root}"
+        )
+    return resolved_path
+
+
+def _form_id(value, label: str) -> int:
+    if isinstance(value, bool):
+        raise ConfigError(f"{label} must be an integer or decimal/hex string")
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, str):
+        text = value.strip()
+        try:
+            result = int(text, 16 if text.lower().startswith("0x") else 10)
+        except ValueError as exc:
+            raise ConfigError(f"{label} must be an integer or decimal/hex string") from exc
+    else:
+        raise ConfigError(f"{label} must be an integer or decimal/hex string")
+    if not 0 <= result <= 0xFFFFFFFF:
+        raise ConfigError(f"{label} must fit an unsigned 32-bit FormID")
+    return result
+
+
+def _validate_state_signature(signature) -> dict:
+    if not isinstance(signature, dict):
+        raise ConfigError("baseline manifest `state_signature` must be an object")
+    missing = sorted(BASELINE_SIGNATURE_FIELDS - signature.keys())
+    if missing:
+        raise ConfigError(
+            "baseline manifest `state_signature` is missing: " + ", ".join(missing)
+        )
+    if not isinstance(signature["player.name"], str) or not signature["player.name"]:
+        raise ConfigError("state_signature `player.name` must be a non-empty string")
+    cell_form_id = _form_id(
+        signature["player.cell_form_id"], "state_signature `player.cell_form_id`"
+    )
+    if cell_form_id == 0:
+        raise ConfigError("state_signature `player.cell_form_id` must be non-zero")
+    for path in ("player.interior", "player.flags.dead", "game.message_box.open"):
+        if not isinstance(signature[path], bool):
+            raise ConfigError(f"state_signature `{path}` must be true or false")
+    if signature["game.message_box.open"] is not False:
+        raise ConfigError("state_signature `game.message_box.open` must be false")
+    for path in signature:
+        if not isinstance(path, str) or not path:
+            raise ConfigError("state_signature paths must be non-empty strings")
+        if "[*]" in path:
+            raise ConfigError(
+                f"state_signature path {path!r} must resolve to one exact value; "
+                "wildcards are not allowed"
+            )
+        resolve({}, path)
+    return signature
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_baseline_timings(step: dict, defaults: dict) -> dict:
+    values = {
+        "timeout": step.get("timeout", 60.0),
+        "state_timeout": step.get("state_timeout", 20.0),
+        "retry_for": step.get("retry_for", defaults.get("baseline_retry_seconds", 60)),
+        "retry_interval": step.get("retry_interval", 1.0),
+    }
+    for key, value in values.items():
+        if (isinstance(value, bool) or not isinstance(value, (int, float)) or
+                not math.isfinite(value)):
+            raise ConfigError(f"load_baseline `{key}` must be a finite number")
+        if value < 0 or (key != "retry_for" and value == 0):
+            qualifier = "non-negative" if key == "retry_for" else "positive"
+            raise ConfigError(f"load_baseline `{key}` must be {qualifier}")
+    return values
+
+
+def active_baseline_context() -> dict:
+    """Resolve the save directory the launched MO2 profile actually exposes."""
+    try:
+        env = mo2ctl.load_env()
+    except (mo2ctl.Fail, OSError, UnicodeError) as exc:
+        raise ConfigError(f"cannot resolve active MO2 profile: {exc}") from exc
+    try:
+        selected = mo2ctl.read_selected_profile(env.root)
+    except (OSError, UnicodeError) as exc:
+        raise ConfigError(f"cannot read MO2 selected profile: {exc}") from exc
+    if selected != env.profile:
+        raise ConfigError(
+            f"MO2 selected profile is {selected!r}, but qa_runner targets {env.profile!r}"
+        )
+
+    settings_path = env.profile_dir / "settings.ini"
+    settings = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        with settings_path.open(encoding="utf-8") as stream:
+            settings.read_file(stream)
+        local_saves = settings.getboolean("General", "LocalSaves", fallback=False)
+        local_settings = settings.getboolean("General", "LocalSettings", fallback=False)
+    except (OSError, UnicodeError, configparser.Error, ValueError) as exc:
+        raise ConfigError(f"cannot read active profile settings {settings_path}: {exc}") from exc
+    if not local_saves or not local_settings:
+        raise ConfigError(
+            f"active profile {env.profile!r} requires LocalSaves=true and LocalSettings=true; "
+            "manifest pair.directory cannot be proven to be Skyrim's active save directory"
+        )
+
+    custom_path = env.profile_dir / "skyrimcustom.ini"
+    custom = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        with custom_path.open(encoding="utf-8") as stream:
+            custom.read_file(stream)
+        local_save_path = custom.get("General", "sLocalSavePath", fallback=None)
+    except (OSError, UnicodeError, configparser.Error, ValueError) as exc:
+        raise ConfigError(f"cannot read active profile settings {custom_path}: {exc}") from exc
+    if local_save_path != "__MO_Saves\\":
+        raise ConfigError(
+            f"active profile {env.profile!r} requires "
+            "skyrimcustom.ini [General] sLocalSavePath=__MO_Saves\\"
+        )
+    try:
+        save_directory = (env.profile_dir / "saves").resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ConfigError(f"cannot resolve active profile save directory: {exc}") from exc
+    return {"profile": env.profile, "save_directory": save_directory}
+
+
+def preflight_baseline(spec: dict, base_dir: Path, *, active_context: dict | None = None) -> dict:
+    """Read and verify the exact save pair before a load command is allowed."""
+    manifest_path = _manifest_path(spec, base_dir)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"cannot read baseline manifest {manifest_path}: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("format") != BASELINE_FORMAT:
+        raise ConfigError(f"baseline manifest must use format {BASELINE_FORMAT!r}")
+
+    profile = manifest.get("profile")
+    if not isinstance(profile, str) or not profile:
+        raise ConfigError("baseline manifest `profile` must be a non-empty string")
+    isolation = manifest.get("isolation")
+    required_isolation = {
+        "settings_ini": {"LocalSaves": "true", "LocalSettings": "true"},
+        "skyrimcustom_ini": {"sLocalSavePath": "__MO_Saves\\"},
+    }
+    if isolation != required_isolation:
+        raise ConfigError(
+            "baseline manifest `isolation` must require LocalSaves=true, "
+            "LocalSettings=true, and sLocalSavePath=__MO_Saves\\"
+        )
+
+    pair = manifest.get("pair")
+    if not isinstance(pair, dict):
+        raise ConfigError("baseline manifest needs a `pair` object")
+    stem = pair.get("stem")
+    if not isinstance(stem, str) or not _SAVE_STEM.fullmatch(stem):
+        raise ConfigError("baseline manifest `pair.stem` must be a plain save filename stem")
+    directory_value = pair.get("directory")
+    if not isinstance(directory_value, str) or not directory_value:
+        raise ConfigError("baseline manifest `pair.directory` must be an absolute path string")
+    directory = Path(directory_value).expanduser()
+    if not directory.is_absolute():
+        raise ConfigError("baseline manifest `pair.directory` must be absolute")
+    if active_context is not None:
+        active_profile = active_context.get("profile")
+        active_directory = active_context.get("save_directory")
+        if profile != active_profile:
+            raise ConfigError(
+                f"baseline manifest profile {profile!r} does not match active profile "
+                f"{active_profile!r}"
+            )
+        try:
+            resolved_directory = directory.resolve()
+            resolved_active_directory = Path(active_directory).resolve()
+        except (OSError, RuntimeError, TypeError) as exc:
+            raise ConfigError(f"cannot resolve active save directory binding: {exc}") from exc
+        if resolved_directory != resolved_active_directory:
+            raise ConfigError(
+                f"baseline manifest directory {directory} is not the active profile save "
+                f"directory {active_directory}"
+            )
+
+    members = pair.get("members")
+    if not isinstance(members, list) or len(members) != 2:
+        raise ConfigError("baseline manifest must declare exactly .ess and .skse members")
+    by_extension = {}
+    for member in members:
+        if not isinstance(member, dict):
+            raise ConfigError("baseline manifest members must be objects")
+        extension = member.get("extension")
+        if extension in by_extension:
+            raise ConfigError(f"duplicate baseline member extension: {extension!r}")
+        by_extension[extension] = member
+    if set(by_extension) != BASELINE_EXTENSIONS:
+        raise ConfigError("baseline manifest must declare exactly .ess and .skse members")
+
+    signature = _validate_state_signature(manifest.get("state_signature"))
+    verified = []
+    for extension in sorted(BASELINE_EXTENSIONS):
+        member = by_extension[extension]
+        expected_bytes = member.get("bytes")
+        expected_sha = member.get("sha256")
+        if (isinstance(expected_bytes, bool) or not isinstance(expected_bytes, int) or
+                expected_bytes < 0):
+            raise ConfigError(f"baseline member {extension} has invalid `bytes`")
+        if not isinstance(expected_sha, str) or not _SHA256.fullmatch(expected_sha):
+            raise ConfigError(f"baseline member {extension} has invalid SHA-256")
+        path = directory / f"{stem}{extension}"
+        if not path.is_file():
+            raise ConfigError(f"baseline member is missing: {path}")
+        try:
+            actual_bytes = path.stat().st_size
+        except OSError as exc:
+            raise ConfigError(f"cannot read baseline member {path}: {exc}") from exc
+        if actual_bytes != expected_bytes:
+            raise ConfigError(
+                f"baseline member size mismatch: {path} "
+                f"(expected {expected_bytes}, got {actual_bytes})"
+            )
+        try:
+            actual_sha = _sha256_file(path)
+        except OSError as exc:
+            raise ConfigError(f"cannot read baseline member {path}: {exc}") from exc
+        if actual_sha != expected_sha.lower():
+            raise ConfigError(
+                f"baseline member SHA-256 mismatch: {path} "
+                f"(expected {expected_sha.lower()}, got {actual_sha})"
+            )
+        verified.append({
+            "extension": extension,
+            "path": str(path),
+            "bytes": actual_bytes,
+            "sha256": actual_sha,
+        })
+
+    return {
+        "manifest": str(manifest_path),
+        "format": BASELINE_FORMAT,
+        "profile": profile,
+        "stem": stem,
+        "members": verified,
+        "state_signature": signature,
+    }
+
+
+def check_state_signature(snapshot: dict, signature: dict) -> tuple[list[dict], dict]:
+    """Compare exact runtime identity fields, normalising FormID representations."""
+    failures = []
+    actual = {}
+    for path, expected in signature.items():
+        values, multi = resolve(snapshot, path)
+        actual[path] = values[0] if len(values) == 1 else values
+        if path == "player.cell_form_id":
+            expected_value = _form_id(expected, "state_signature `player.cell_form_id`")
+            converted = []
+            for value in values:
+                try:
+                    converted.append(_form_id(value, "runtime `player.cell_form_id`"))
+                except ConfigError:
+                    pass
+            ok = expected_value in converted
+        else:
+            # Python considers 0 == False and 1 == True. JSON state does not:
+            # a numeric modal/dead/interior flag is a malformed bridge response,
+            # not a valid match for a boolean fingerprint field.
+            ok = bool(values) and any(
+                value == expected and
+                (not isinstance(expected, bool) or isinstance(value, bool))
+                for value in values
+            )
+        if not ok:
+            failures.append({
+                "path": path,
+                "op": "eq",
+                "expected": expected,
+                "actual": values,
+                "matched_any_of": len(values) if multi else None,
+            })
+    return failures, actual
+
+
+def state_load_epoch(snapshot: dict) -> int:
+    values, _multi = resolve(snapshot, "game.load_epoch")
+    if (len(values) != 1 or isinstance(values[0], bool) or
+            not isinstance(values[0], int) or values[0] < 0):
+        raise ConfigError(
+            "runtime /state must expose one non-negative integer `game.load_epoch`; "
+            "rebuild and deploy the matching AgentBridge DLL"
+        )
+    return values[0]
+
+
+def poll_state_signature(probe, signature: dict, timeout: float, interval: float,
+                         after_load_epoch: int,
+                         *, clock=time.monotonic, sleeper=time.sleep) -> dict:
+    """Poll structured state until the complete fingerprint converges or times out."""
+    deadline = clock() + max(0, timeout)
+    attempts = 0
+    failures = []
+    actual = {}
+    error = "/state was not queried"
+    while True:
+        attempts += 1
+        snapshot = probe()
+        if snapshot.get("ok"):
+            failures, actual = check_state_signature(snapshot, signature)
+            try:
+                load_epoch = state_load_epoch(snapshot)
+            except ConfigError:
+                load_epoch = None
+            actual["game.load_epoch"] = load_epoch
+            if load_epoch is None or load_epoch <= after_load_epoch:
+                failures.append({
+                    "path": "game.load_epoch",
+                    "op": "gt",
+                    "expected": after_load_epoch,
+                    "actual": [] if load_epoch is None else [load_epoch],
+                    "matched_any_of": None,
+                })
+            if not failures:
+                return {
+                    "matched": True,
+                    "attempts": attempts,
+                    "expected": signature,
+                    "actual": actual,
+                    "load_epoch": {"before": after_load_epoch, "after": load_epoch},
+                }
+            error = f"baseline state fingerprint did not match ({len(failures)} field(s))"
+        else:
+            failures = []
+            actual = {}
+            error = f"/state unavailable: {snapshot.get('error')}"
+        if clock() >= deadline:
+            raise StepFailed(
+                f"{error} (after {attempts} attempt(s) over {timeout}s)", failures
+            )
+        sleeper(interval)
 
 
 # ---------------------------------------------------------------------------
@@ -177,11 +574,16 @@ def _mo2(fn, **kwargs) -> dict:
 
 
 class Runner:
-    def __init__(self, spec: dict, base_dir: Path, *, interactive: bool):
+    def __init__(self, spec: dict, base_dir: Path, *, interactive: bool,
+                 clock=time.monotonic, sleeper=time.sleep,
+                 baseline_context=active_baseline_context):
         self.spec = spec
         self.base_dir = base_dir
         self.interactive = interactive
         self.defaults = spec.get("defaults", {})
+        self.clock = clock
+        self.sleeper = sleeper
+        self.baseline_context = baseline_context
 
     def path_of(self, value: str) -> Path:
         """Resolve a step's path relative to the qa.json, not the shell's cwd.
@@ -242,16 +644,54 @@ class Runner:
         return _mo2(mo2ctl.cmd_kill, mo2=step.get("mo2", False), timeout=step.get("timeout", 15.0))
 
     def step_load_baseline(self, step) -> dict:
-        save = step.get("save") or self.spec.get("baseline")
-        if not save:
-            raise StepFailed("no save named, and the spec has no top-level `baseline`")
-        result = bridge.console(f"load {save}", timeout=step.get("timeout", 60.0))
+        try:
+            timings = _load_baseline_timings(step, self.defaults)
+        except ConfigError as exc:
+            raise StepFailed(f"invalid load_baseline: {exc}") from exc
+        try:
+            context = self.baseline_context()
+            preflight = preflight_baseline(
+                self.spec, self.base_dir, active_context=context
+            )
+        except ConfigError as exc:
+            raise StepFailed(f"baseline preflight failed: {exc}") from exc
+        save = preflight["stem"]
+        if step.get("save") is not None and step["save"] != save:
+            raise StepFailed(
+                f"load_baseline `save` {step['save']!r} does not match manifest stem {save!r}"
+            )
+        before = bridge.state(timeout=timings["state_timeout"])
+        if not before.get("ok"):
+            raise StepFailed(
+                f"cannot establish pre-load state epoch: {before.get('error')}"
+            )
+        try:
+            before_epoch = state_load_epoch(before)
+        except ConfigError as exc:
+            raise StepFailed(f"cannot establish pre-load state epoch: {exc}") from exc
+        result = bridge.console(f"load {save}", timeout=timings["timeout"])
         if not result.get("ok"):
             raise StepFailed(f"load failed: {result.get('error')}")
-        # Loading is asynchronous — the console call returns long before the cell
-        # is up. Everything downstream asserts on state, so settle here.
-        time.sleep(step.get("settle", self.defaults.get("settle_seconds", 8)))
-        return {"save": save, **result}
+        # Console success only proves that the command was accepted. A save load
+        # is asynchronous and may stop at a modal, so prove the complete runtime
+        # identity instead of sleeping and declaring success.
+        fingerprint = poll_state_signature(
+            lambda: bridge.state(timeout=timings["state_timeout"]),
+            preflight["state_signature"],
+            timings["retry_for"],
+            timings["retry_interval"],
+            before_epoch,
+            clock=self.clock,
+            sleeper=self.sleeper,
+        )
+        return {
+            "save": save,
+            **result,
+            "baseline_preflight": {
+                key: value for key, value in preflight.items() if key != "state_signature"
+            },
+            "state_fingerprint": fingerprint,
+        }
 
     def step_console(self, step) -> dict:
         result = bridge.console(require(step, "cmd"), step.get("ref"),
@@ -590,8 +1030,20 @@ def validate(spec: dict, base_dir: Path) -> list[str]:
                     problems.append(f"{where}: assert_global has unknown operator {next(iter(condition))!r}")
             if kind == "handoff_user" and not step.get("message"):
                 problems.append(f"{where}: handoff_user needs `message`")
-            if kind == "load_baseline" and not (step.get("save") or spec.get("baseline")):
-                problems.append(f"{where}: no `save` and no top-level `baseline`")
+            if kind == "load_baseline":
+                try:
+                    _load_baseline_timings(step, spec.get("defaults", {}))
+                except ConfigError as exc:
+                    problems.append(f"{where}: {exc}")
+                try:
+                    preflight = preflight_baseline(spec, base_dir)
+                    if step.get("save") is not None and step["save"] != preflight["stem"]:
+                        problems.append(
+                            f"{where}: `save` {step['save']!r} does not match manifest stem "
+                            f"{preflight['stem']!r}"
+                        )
+                except ConfigError as exc:
+                    problems.append(f"{where}: baseline preflight failed: {exc}")
             if kind == "assert_state":
                 expect = step.get("expect")
                 if not isinstance(expect, dict) or not expect:
