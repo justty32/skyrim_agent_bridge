@@ -43,7 +43,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from xml.etree import ElementTree as ET
 import zipfile
@@ -869,11 +869,13 @@ def evaluate_static_gates(capture: dict, baseline: dict | None = None) -> dict:
     }
 
 
-def parse_crash_time(path: Path) -> datetime | None:
+def parse_crash_time(path: Path, local_tz: tzinfo | None = None) -> datetime | None:
     match = re.match(r"crash-(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})\.log$", path.name)
     if not match:
         return None
-    return datetime(*map(int, match.groups()), tzinfo=UTC)
+    stamp = datetime(*map(int, match.groups()))
+    localized = stamp.astimezone() if local_tz is None else stamp.replace(tzinfo=local_tz)
+    return localized.astimezone(UTC)
 
 
 def parse_uptime_ms(text: str) -> int | None:
@@ -899,7 +901,7 @@ def uptime_bin(ms: int | None) -> str:
     return "content/playtime window"
 
 
-def summarize_crash_log(path: Path, mod: str | None) -> dict:
+def summarize_crash_log(path: Path, mod: str | None, local_tz: tzinfo | None = None) -> dict:
     text = path.read_text(encoding="utf-8", errors="replace")
     modules = []
     for match in re.finditer(r"([A-Za-z0-9_ .'-]+\.(?:dll|exe))\+([0-9A-Fa-f]+)", text, flags=re.IGNORECASE):
@@ -917,9 +919,10 @@ def summarize_crash_log(path: Path, mod: str | None) -> dict:
         if "exception" in lowered or "access violation" in lowered:
             exception = line.strip()
             break
+    crash_time = parse_crash_time(path, local_tz)
     return {
         "file": str(path),
-        "time": parse_crash_time(path).isoformat() if parse_crash_time(path) else None,
+        "time": crash_time.isoformat() if crash_time else None,
         "has_call_stack": has_stack,
         "top_modules": modules,
         "mentions_mod": relevant,
@@ -938,7 +941,7 @@ def crash_log_dir_from_status(text: str) -> Path | None:
     return Path(match.group(1)).expanduser()
 
 
-def crash_triage_from_capture(results: list[dict], args) -> dict:
+def crash_triage_from_capture(results: list[dict], args, local_tz: tzinfo | None = None) -> dict:
     if not args.crash_since:
         return {"checked": False, "reason": "no --crash-since provided"}
     status_text = next((r.get("text", "") for r in results if r.get("tool") == "housecarl_load_order_status"), "")
@@ -950,17 +953,18 @@ def crash_triage_from_capture(results: list[dict], args) -> dict:
     except ValueError as exc:
         raise Fail(f"--crash-since must be ISO datetime, got {args.crash_since!r}") from exc
     if since.tzinfo is None:
-        since = since.replace(tzinfo=UTC)
+        since = since.astimezone() if local_tz is None else since.replace(tzinfo=local_tz)
+    since = since.astimezone(UTC)
 
     chosen = []
     last_time: datetime | None = None
     for path in sorted(folder.glob("crash-*.log")):
-        when = parse_crash_time(path)
+        when = parse_crash_time(path, local_tz)
         if not when or when < since:
             continue
         if last_time and abs((when - last_time).total_seconds()) <= 1:
             continue
-        chosen.append(summarize_crash_log(path, args.mod))
+        chosen.append(summarize_crash_log(path, args.mod, local_tz))
         last_time = when
     return {"checked": True, "folder": str(folder), "since": since.isoformat(), "new_logs": chosen}
 
@@ -2229,7 +2233,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--housecarl-server", help=f"houseCARL MCP server path (default: {DEFAULT_HOUSECARL_SERVER})")
     s.add_argument("--limit", type=int, default=100, help="finding cap passed to houseCARL validators")
     s.add_argument("--max-chars", type=int, default=80000, help="max chars per houseCARL tool response")
-    s.add_argument("--crash-since", help="ISO timestamp; triage crash-*.log files from this time onward")
+    s.add_argument(
+        "--crash-since",
+        help="ISO timestamp; explicit offsets recommended, while offset-free values use local time",
+    )
     s.set_defaults(func=cmd_static_gates)
 
     s = sub_add("select-profile", "switch ModOrganizer.ini selected_profile while preserving line endings")

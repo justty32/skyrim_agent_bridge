@@ -29,7 +29,8 @@ Useful optional scopes:
 - `--asset <Data-relative path>` for `housecarl_asset_status`
 - `--mesh <Data-relative mesh path>` for `housecarl_nif_inspect`
 - `--crash-since <ISO timestamp>` to triage new `crash-*.log` files without assuming
-  every Proton log has a call stack
+  every Proton log has a call stack. CrashLogger filenames are local wall-clock time;
+  the runner converts them to UTC before comparing them with the supplied timestamp.
 
 ## Gates
 
@@ -57,6 +58,8 @@ and scoped plugin validator failures are red.
 The crash triage parser:
 
 - reads the configured `crash_logs` folder from `housecarl_load_order_status`
+- interprets CrashLogger filename timestamps in the host's local timezone and reports UTC;
+  `--crash-since` should include an explicit offset, while an offset-free value means local time
 - deduplicates crash logs whose timestamps are within one second
 - marks Proton logs with no `CALL STACK` as `unable_to_attribute` instead of pretending
   a culprit is known

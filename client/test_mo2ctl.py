@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from datetime import timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -596,7 +597,7 @@ class Mo2CtlStaticGateTests(unittest.TestCase):
 
         self.assertEqual(evaluated["status"], "pass")
 
-    def test_crash_logs_dedupe_one_second_and_mark_missing_stack(self) -> None:
+    def test_crash_logs_use_local_filename_time_and_dedupe_one_second(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
             first = folder / "crash-2026-08-06-10-00-00.log"
@@ -605,19 +606,41 @@ class Mo2CtlStaticGateTests(unittest.TestCase):
             first.write_text("Unhandled exception\nUptime: 6599\nAgentBridge.dll+0054404\n", encoding="utf-8")
             duplicate.write_text("partial handler crash\n", encoding="utf-8")
             later.write_text("CALL STACK\nSkyrimSE.exe+02C3957\n", encoding="utf-8")
-            args = argparse.Namespace(crash_since="2026-08-06T09:59:00Z", mod="AgentBridge")
+            args = argparse.Namespace(crash_since="2026-08-06T01:59:00Z", mod="AgentBridge")
             status = self.result(
                 "housecarl_load_order_status",
                 f"crash_logs: {folder}  (configured)\n",
             )
 
-            result = mo2ctl.crash_triage_from_capture([status], args)
+            local_tz = timezone(timedelta(hours=8))
+            result = mo2ctl.crash_triage_from_capture([status], args, local_tz)
 
             self.assertTrue(result["checked"])
             self.assertEqual(len(result["new_logs"]), 2)
+            self.assertEqual(result["new_logs"][0]["time"], "2026-08-06T02:00:00+00:00")
             self.assertFalse(result["new_logs"][0]["has_call_stack"])
             self.assertEqual(result["new_logs"][0]["uptime_bin"], "load/plugin-conflict window")
             self.assertEqual(result["new_logs"][0]["attribution"], "candidate")
+
+    def test_crash_since_utc_excludes_older_local_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            older = folder / "crash-2026-08-06-10-00-00.log"
+            newer = folder / "crash-2026-08-06-10-02-00.log"
+            older.write_text("older\n", encoding="utf-8")
+            newer.write_text("newer\n", encoding="utf-8")
+            args = argparse.Namespace(crash_since="2026-08-06T02:01:00Z", mod=None)
+            status = self.result(
+                "housecarl_load_order_status",
+                f"crash_logs: {folder}  (configured)\n",
+            )
+
+            result = mo2ctl.crash_triage_from_capture(
+                [status], args, timezone(timedelta(hours=8))
+            )
+
+            self.assertEqual([Path(item["file"]).name for item in result["new_logs"]], [newer.name])
+            self.assertEqual(result["new_logs"][0]["time"], "2026-08-06T02:02:00+00:00")
 
 
 if __name__ == "__main__":

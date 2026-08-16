@@ -91,6 +91,10 @@ and NIF inspection. Use a before/after baseline around a `try/<mod>` branch:
 ./mo2ctl.py static-gates --plugin NewMod.esp --baseline /tmp/before.json --report /tmp/newmod-static.json --json
 ```
 
+For crash triage, CrashLogger's `crash-YYYY-MM-DD-HH-MM-SS.log` timestamp is local wall-clock
+time. `--crash-since` accepts ISO time; include an explicit offset when passing an absolute
+timestamp (for example, `2026-08-16T03:00:00Z`). An offset-free value is interpreted as local time.
+
 The comparison is deliberately semantic. The three game-written CC loadorder warnings are
 ignored, existing whole-order findings are warnings unless they get worse, and SKSE DLL
 diagnostics become red only when a baseline comparison shows new contested or
