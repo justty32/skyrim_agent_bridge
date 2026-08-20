@@ -2061,6 +2061,13 @@ def cmd_launch(env: Env, args) -> dict:
     if game_pids():
         raise Fail("Skyrim is already running (mo2ctl kill first)")
 
+    selected = read_selected_profile(env.root)
+    if selected != env.profile:
+        raise Fail(
+            f"MO2 selected profile is {selected!r}, but launch targets {env.profile!r}; "
+            f"run `mo2ctl select-profile {env.profile}` before launch"
+        )
+
     background_active = None
     if getattr(args, "background_active", False):
         if mo2_pids():

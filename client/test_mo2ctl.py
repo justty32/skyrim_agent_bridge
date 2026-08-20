@@ -375,6 +375,9 @@ class Mo2CtlBackgroundActiveTests(unittest.TestCase):
         self.root = Path(self.tmp.name) / "mo2"
         self.profile = self.root / "profiles" / "QA"
         self.profile.mkdir(parents=True)
+        (self.root / "ModOrganizer.ini").write_bytes(
+            b"[General]\r\nselected_profile=@ByteArray(QA)\r\n"
+        )
         self.env = mo2ctl.Env(self.root, "QA")
 
     def tearDown(self) -> None:
@@ -466,6 +469,21 @@ class Mo2CtlBackgroundActiveTests(unittest.TestCase):
 
         self.assertEqual((self.profile / "skyrim.ini").read_bytes(), original)
         self.assertFalse(mo2ctl.background_active_backup(self.env).exists())
+
+    @patch("mo2ctl.game_pids", return_value=[])
+    @patch("mo2ctl.subprocess.Popen")
+    def test_launch_refuses_selected_profile_mismatch(self, popen, _game_pids) -> None:
+        (self.root / "ModOrganizer.ini").write_bytes(
+            b"[General]\r\nselected_profile=@ByteArray(Play)\r\n"
+        )
+        args = argparse.Namespace(
+            shortcut="SKSE", wait=1, no_wait=True, background_active=False,
+        )
+
+        with self.assertRaisesRegex(mo2ctl.Fail, "selected profile is 'Play'.*targets 'QA'"):
+            mo2ctl.cmd_launch(self.env, args)
+
+        popen.assert_not_called()
 
 
 class Mo2CtlStaticGateTests(unittest.TestCase):
