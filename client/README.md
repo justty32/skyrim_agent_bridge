@@ -27,7 +27,7 @@ anything is a harness you stop using.
 ./mo2ctl.py profile-semantics [--ref HEAD]
 ./mo2ctl.py profile-absorb-churn
 ./mo2ctl.py static-gates --plugin NewMod.esp --baseline before.json --report after.json
-./mo2ctl.py select-profile QA|Default
+./mo2ctl.py select-profile Modpack-KR
 ./mo2ctl.py try-begin "Mod Name"
 ./mo2ctl.py try-fail
 ./mo2ctl.py try-pass -m "Validate Mod Name"

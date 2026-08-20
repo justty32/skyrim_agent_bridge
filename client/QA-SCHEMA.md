@@ -79,7 +79,7 @@ runtime fingerprint:
 ```json
 {
   "format": "baseline-manifest-v1",
-  "profile": "Modpack-KR-Dev",
+  "profile": "Modpack-KR",
   "isolation": {
     "settings_ini": {
       "LocalSaves": "true",
