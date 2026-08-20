@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,118 @@ namespace {
             { "form_id", form->GetFormID() },
             { "editor_id", Str(form->GetFormEditorID()) },
         };
+    }
+
+    json Point3(const RE::NiPoint3& point)
+    {
+        return { { "x", point.x }, { "y", point.y }, { "z", point.z } };
+    }
+
+    json Vector4(const RE::hkVector4& vector)
+    {
+        alignas(16) float values[4];
+        _mm_store_ps(values, vector.quad);
+        return {
+            { "x", values[0] }, { "y", values[1] },
+            { "z", values[2] }, { "w", values[3] },
+        };
+    }
+
+    json Bound(const RE::BSBound& bound)
+    {
+        return {
+            { "center", Point3(bound.center) },
+            { "extents", Point3(bound.extents) },
+        };
+    }
+
+    json ShapeBlock(const RE::hkpShape* shape, const RE::hkTransform& transform,
+        std::size_t depth = 0)
+    {
+        if (!shape) return nullptr;
+        RE::hkAabb aabb;
+        shape->GetAabbImpl(transform, 0.0F, aabb);
+        json block{
+            { "type", static_cast<std::underlying_type_t<RE::hkpShapeType>>(shape->type) },
+            { "world_aabb_havok_metres", {
+                { "min", Vector4(aabb.min) },
+                { "max", Vector4(aabb.max) },
+            } },
+        };
+        if (depth >= 4) {
+            block["truncated"] = true;
+            return block;
+        }
+        if (shape->type == RE::hkpShapeType::kCapsule) {
+            const auto* capsule = static_cast<const RE::hkpCapsuleShape*>(shape);
+            const auto a = Vector4(capsule->vertexA);
+            const auto b = Vector4(capsule->vertexB);
+            const auto dx = b["x"].get<float>() - a["x"].get<float>();
+            const auto dy = b["y"].get<float>() - a["y"].get<float>();
+            const auto dz = b["z"].get<float>() - a["z"].get<float>();
+            const auto axisLength = std::sqrt(dx * dx + dy * dy + dz * dz);
+            block.update({
+                { "kind", "capsule" },
+                { "radius_havok_metres", capsule->radius },
+                { "vertex_a_havok_metres", a },
+                { "vertex_b_havok_metres", b },
+                { "axis_length_havok_metres", axisLength },
+                { "total_length_havok_metres", axisLength + 2.0F * capsule->radius },
+            });
+        } else if (shape->type == RE::hkpShapeType::kList) {
+            const auto* list = static_cast<const RE::hkpListShape*>(shape);
+            block["kind"] = "list";
+            block["children"] = json::array();
+            for (const auto& child : list->childInfo) {
+                block["children"].push_back(ShapeBlock(child.shape, transform, depth + 1));
+            }
+        }
+        return block;
+    }
+
+    json PlayerCollisionBlock(RE::PlayerCharacter* player)
+    {
+        auto* controller = player->GetCharController();
+        if (!controller) return nullptr;
+
+        json block{
+            { "controller_type", "unknown" },
+            { "collision_bound_skyrim_units", Bound(controller->collisionBound) },
+            { "bumper_bound_skyrim_units", Bound(controller->bumperCollisionBound) },
+            { "center", controller->center },
+            { "scale", controller->scale },
+            { "actor_height", controller->actorHeight },
+            { "active_shape", nullptr },
+            { "proxy", nullptr },
+        };
+        RE::hkVector4 rawPosition;
+        RE::hkVector4 centeredPosition;
+        controller->GetPosition(rawPosition, false);
+        controller->GetPosition(centeredPosition, true);
+        block["position_havok_metres"] = {
+            { "raw", Vector4(rawPosition) },
+            { "with_center_offset", Vector4(centeredPosition) },
+        };
+
+        auto* proxyController = skyrim_cast<RE::bhkCharProxyController*>(controller);
+        if (!proxyController) return block;
+        block["controller_type"] = "bhkCharProxyController";
+
+        auto* proxy = proxyController->GetCharacterProxy();
+        if (!proxy) return block;
+        block["proxy"] = {
+            { "keep_distance_havok_metres", proxy->keepDistance },
+            { "keep_contact_tolerance_havok_metres", proxy->keepContactTolerance },
+        };
+
+        auto* phantom = proxy->shapePhantom;
+        const auto* shape = phantom ? phantom->GetShape() : nullptr;
+        if (!shape) return block;
+        block["proxy"]["phantom_translation_havok_metres"] =
+            Vector4(phantom->motionState.transform.translation);
+
+        block["active_shape"] = ShapeBlock(shape, phantom->motionState.transform);
+        return block;
     }
 
     json PlayerBlock(RE::PlayerCharacter* player)
@@ -59,6 +172,7 @@ namespace {
             { "worldspace", Str(world ? world->GetFormEditorID() : nullptr) },
             { "worldspace_form_id", world ? world->GetFormID() : 0 },
             { "interior", cell ? cell->IsInteriorCell() : false },
+            { "collision", PlayerCollisionBlock(player) },
             { "actor_values", av },
             { "flags", {
                 { "in_combat", player->IsInCombat() },

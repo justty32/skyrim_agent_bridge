@@ -27,15 +27,20 @@ Code reuse, when it comes, goes the other way: lift the scene-walking routines i
 
 ## Status
 
-Version 0.8.0 source and deployment. The current-cell, loaded-actor, cross-cell, retry,
+Version 0.9.0 source and live-accepted deployment. The current-cell, loaded-actor, cross-cell, retry,
 structured dialogue, structured MessageBox, and manifest + load-epoch baseline paths are
-runtime-verified. The 2026-08-16 Dev acceptance matched the exact external-manifest save
-pair, advanced load epoch `0 -> 1`, matched the full state fingerprint, and passed 4/4.
+runtime-verified. `/state.player.collision` adds read-only character-controller diagnostics
+(active Havok shape tree, controller bounds, and proxy contact margins). Its 2026-08-21 live
+probe matched the exact external-manifest save pair, advanced load epoch `0 -> 1`, and read a
+`bhkCharProxyController` whose capsule is radius `0.294322 m`, axis `1.118425 m`, total
+`1.707070 m`; the complete active list AABB is `0.614350 × 0.844350 × 1.928800 m`, with
+`keepDistance=0.050000 m` and `keepContactTolerance=0.100000 m`. The tested DLL SHA-256 is
+`9c11b037a803357980946a09ef411038a91fee7f8937ca6e8fcf0141b0d2257c`.
 
 | Route | Runs on | Notes |
 |---|---|---|
 | `GET /ping` | socket thread | Liveness. Answers during load screens on purpose — lets the runner tell "process alive, game busy" from "process dead". |
-| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`. `loaded_actors` walks all four engine process lists, deduplicates them, and exposes cell/FormID/3D-loaded state. Player + game (including dialogue, `game.message_box`, and the successful-save-load `game.load_epoch`) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and a paused/unfocused game can 503 while the task queue isn't draining — use `/ping` for liveness or launch the client with background-active mode. |
+| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`. `loaded_actors` walks all four engine process lists, deduplicates them, and exposes cell/FormID/3D-loaded state. Player + game (including dialogue, `game.message_box`, successful-save-load `game.load_epoch`, and `player.collision`'s active Havok capsule/controller bounds/proxy margins) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and a paused/unfocused game can 503 while the task queue isn't draining — use `/ping` for liveness or launch the client with background-active mode. |
 | `GET /global` | game thread | `?editor_id=...`; live TESGlobal value without parsing noisy console output. |
 | `POST /console` | game thread | `{"cmd": "...", "ref": "0x14"}`. `ref` is optional — it's the console's selected reference, for dotted commands. Output capture is one line and best-effort; see the pitfall below. |
 | `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","scope":"loaded","distance":128}` or `{"form_id":"0x02001234"}`. Exact name or stable runtime reference ID; `scope=loaded` searches Skyrim's actor process lists and movement can cross cells. |

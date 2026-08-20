@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 # Project name = the SKSE .dll file name.
-project(AgentBridge VERSION 0.8.0 LANGUAGES CXX)
+project(AgentBridge VERSION 0.9.0 LANGUAGES CXX)
 
 # Optional auto-deploy: set SKYRIM_FOLDER (loose) or SKYRIM_MODS_FOLDER (MO2/Vortex)
 # and the post-build step copies the .dll into place. Left unset on offline/CI.
