@@ -11,6 +11,9 @@ answer that. Transport failures come back as `{"ok": False, "error": ...}`.
 from __future__ import annotations
 
 import json
+import math
+import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +23,11 @@ BASE_URL = "http://127.0.0.1:5099"
 # The DLL binds INADDR_LOOPBACK deliberately — it runs console commands, so it must
 # not be reachable off-box. Changing the port is a two-sided edit; see plugin.cpp.
 DEFAULT_TIMEOUT = 15.0
+
+_ACTOR_VALUE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_ACTOR_VALUE_OUTPUT = re.compile(
+    r"^GetActorValue:\s*(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*>>\s*"
+    r"(?P<value>[+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*$")
 
 
 def _request(method: str, path: str, *, body: dict | None = None, timeout: float) -> dict:
@@ -141,3 +149,86 @@ def global_value(editor_id: str, *, timeout: float = DEFAULT_TIMEOUT) -> dict:
     """Read a TESGlobal by EditorID without relying on console output."""
     query = urllib.parse.urlencode({"editor_id": editor_id})
     return _request("GET", f"/global?{query}", timeout=timeout)
+
+
+def actor_value(name: str, ref: str, *, consecutive: int = 3,
+                max_attempts: int = 12, interval: float = 0.1,
+                timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """Read one actor value through narrowly validated console output.
+
+    Console output is normally diagnostic-only because another plugin can race the
+    bridge's last-line capture. This helper is the deliberately narrow exception: it
+    accepts only the engine's exact ``GetActorValue: NAME >> NUMBER`` shape, requires
+    the echoed actor-value name to match, and requires repeated identical values.
+    Callers still choose the exact runtime reference (for example player ``0x14`` or
+    Lydia ``0x000A2C94``).
+    """
+    if not _ACTOR_VALUE_NAME.fullmatch(name):
+        return {"ok": False, "error": f"invalid actor value name: {name!r}"}
+    if not isinstance(ref, str) or not ref.strip():
+        return {"ok": False, "error": "ref must be a non-empty runtime FormID string"}
+    if consecutive < 2:
+        return {"ok": False, "error": "consecutive must be at least 2"}
+    if max_attempts < consecutive:
+        return {"ok": False, "error": "max_attempts must be >= consecutive"}
+    if interval < 0:
+        return {"ok": False, "error": "interval must be non-negative"}
+
+    accepted: list[dict] = []
+    rejected: list[dict] = []
+    last_value: float | None = None
+    streak = 0
+
+    for attempt in range(1, max_attempts + 1):
+        result = console(f"getav {name}", ref=ref, timeout=timeout)
+        output = result.get("output")
+        line = output[0].strip() if isinstance(output, list) and len(output) == 1 \
+            and isinstance(output[0], str) else None
+        match = _ACTOR_VALUE_OUTPUT.fullmatch(line or "")
+
+        reason = None
+        value = None
+        if not result.get("ok"):
+            reason = result.get("error", "console request failed")
+        elif line is None:
+            reason = "console output was not exactly one line"
+        elif match is None:
+            reason = "console line did not match GetActorValue format"
+        elif match.group("name").casefold() != name.casefold():
+            reason = "console echoed a different actor value"
+        else:
+            value = float(match.group("value"))
+            if not math.isfinite(value):
+                reason = "console returned a non-finite value"
+
+        if reason is not None:
+            rejected.append({"attempt": attempt, "reason": reason, "output": output})
+            streak = 0
+            last_value = None
+        else:
+            streak = streak + 1 if value == last_value else 1
+            last_value = value
+            accepted.append({"attempt": attempt, "value": value, "output": line})
+            if streak >= consecutive:
+                return {
+                    "ok": True,
+                    "actor_value": name,
+                    "ref": ref,
+                    "value": value,
+                    "consecutive": streak,
+                    "accepted": accepted,
+                    "rejected": rejected,
+                }
+
+        if attempt < max_attempts and interval:
+            time.sleep(interval)
+
+    return {
+        "ok": False,
+        "error": f"no {consecutive} consecutive identical validated reads "
+                 f"within {max_attempts} attempts",
+        "actor_value": name,
+        "ref": ref,
+        "accepted": accepted,
+        "rejected": rejected,
+    }

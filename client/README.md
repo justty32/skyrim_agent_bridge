@@ -9,6 +9,7 @@ contract, and a two-sided edit should be one commit.
 |---|---|---|
 | `mo2ctl.py` | ✅ verified end-to-end 2026-08-02 | Drive MO2 without its GUI: install / uninstall / enable / disable / launch / kill / status |
 | `bridge.py` | ✅ | Talking to the in-game HTTP bridge. Owns the port; everything else imports it |
+| `actor_value_probe.py` | ✅ offline-tested | Strict `getav` reader: exact engine output shape plus repeated identical reads for a chosen runtime reference |
 | `qa_runner.py` | ✅ semantic paths and baseline manifest/fingerprint gate runtime-verified | Execute a `qa.json`, including fail-closed baseline loading and retryable actor/dialogue/MessageBox steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
 | `qa_mcp.py` | ✅ 0.3.0 runtime-verified; 0.4.0 MessageBox tool offline-tested; client restart required to discover new tool schemas | MCP server: state, console, actor, dialogue, MessageBox, global, structured wait, and whole-run tools |
 
