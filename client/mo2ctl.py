@@ -518,9 +518,12 @@ def archive_library_status(sha256: str | None) -> str:
     if not exe:
         return "unchecked"
     js = f'const n=db.getSiblingDB("skyrim").archives.countDocuments({{_id:"{sha256.lower()}"}}); print(n);'
+    # 本機 mod 庫的 mongod 在 27017（與 mod-library/db/*.py 的預設一致）。
+    # 這裡原本硬編 27018，連不上時被 fail-safe 吞成 "unchecked"，所以一直沒被發現。
+    uri = os.environ.get("SKYRIM_MONGO_URI", "mongodb://127.0.0.1:27017").rstrip("/")
     try:
         proc = subprocess.run(
-            [exe, "mongodb://127.0.0.1:27018/skyrim", "--quiet", "--eval", js],
+            [exe, f"{uri}/skyrim", "--quiet", "--eval", js],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -68,9 +68,11 @@ of its enabled plugins, `install` appends those archive names to the active prof
 
 `install` also updates `profiles/manifest.json` by default. The entry records mod name,
 profile, version, source path / URL, archive sha256, FOMOD choices, plugins, and BSA
-files. When `mongosh` or `mongo` can reach `mongodb://127.0.0.1:27018/skyrim`, the
-sha256 is checked against the `archives` collection where `_id` is the digest; otherwise
-the entry records `archive_library: unchecked`.
+files. When `mongosh` or `mongo` can reach the mod-library MongoDB, the sha256 is
+checked against the `archives` collection where `_id` is the digest; otherwise the
+entry records `archive_library: unchecked`. The URI defaults to
+`mongodb://127.0.0.1:27017` (matching `mod-library/db/*.py`) and can be overridden
+with `SKYRIM_MONGO_URI`.
 
 Profile git helpers deliberately compare profile state semantically, not byte-for-byte.
 The current known churn is: Skyrim may write
