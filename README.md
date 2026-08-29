@@ -1,198 +1,119 @@
 # agent-bridge
 
-SKSE plugin that opens a localhost HTTP server **inside the running Skyrim process**, so a
-Linux-side agent can read structured game state, drive the console, locate and move to
-actors, and operate dialogue — without touching the OS input/screen layer at all. Visual
-and UI-handfeel checks remain explicit human handoffs; screenshot and synthetic-input
-routes are deferred.
+這個 SKSE plugin 在 Skyrim 行程內開啟 localhost HTTP server，讓 Linux 端 agent 讀取結構化
+遊戲狀態、執行 console、尋找與移動 actor、操作對話，全程不碰 OS 輸入或畫面層。視覺與
+操作手感仍交由人工驗收；`POST /screenshot` 與 `POST /input` 尚未實作。
 
-The eyes and hands go *into* the game process. See
-[`workflows/plans/ai-ingame-qa-loop.md`](../../workflows/plans/ai-ingame-qa-loop.md)
-(decision D1) for why: the host is Wayland with no screenshot tool installed, `xdotool` is
-useless against non-XWayland windows, and the game lives behind Proton's pressure-vessel —
-"screenshot the screen and fake keypresses" would be fragile and unreproducible.
+## 定位與邊界
 
-## Why a sibling of `scene-capture-bridge` and not part of it
-
-Decided 2026-08-02 (plan Phase 1.1). Both are SKSE C++23 DLLs on the same toolchain, and
-`scene-capture-bridge` already has related cell-walking / JSON-export patterns. But they
-have opposite lifecycles: `scene-capture-bridge` is an **authoring** tool a
-human drives with hotkeys and an ImGui panel, shipped alongside content; `agent-bridge` is
-**test harness** that must be installable and removable per QA run and must never end up in
-a player-facing load order. Folding a listening socket into the authoring tool would mean
-every content session also opens a port that can run console commands.
-
-Code reuse, when it comes, goes the other way: lift the scene-walking routines into
-`agent-bridge` as needed rather than merging the two plugins.
+`agent-bridge` 是每次 QA 可獨立安裝、移除的 **test harness**，不得進入玩家 load order；
+`scene-capture-bridge` 則是由人以 hotkey 與 ImGui 操作、隨內容交付的 **authoring tool**。
+兩者生命週期相反，因此保持為同層 repo；需要共用 scene-walking 邏輯時，將所需部分提取到
+`agent-bridge`，不要把可執行 console command 的 listening socket 併入 authoring tool。
+背景理由見 [`ai-ingame-qa-loop.md`](../../workflows/plans/ai-ingame-qa-loop.md) decision D1：
+Wayland、非 XWayland 視窗與 Proton pressure-vessel 使螢幕擷取加模擬輸入不可靠。
 
 ## Status
 
-Version 0.9.0 source and live-accepted deployment. The current-cell, loaded-actor, cross-cell, retry,
-structured dialogue, structured MessageBox, and manifest + load-epoch baseline paths are
-runtime-verified. `/state.player.collision` adds read-only character-controller diagnostics
-(active Havok shape tree, controller bounds, and proxy contact margins). Its 2026-08-21 live
-probe matched the exact external-manifest save pair, advanced load epoch `0 -> 1`, and read a
-`bhkCharProxyController` whose capsule is radius `0.294322 m`, axis `1.118425 m`, total
-`1.707070 m`; the complete active list AABB is `0.614350 × 0.844350 × 1.928800 m`, with
-`keepDistance=0.050000 m` and `keepContactTolerance=0.100000 m`. The tested DLL SHA-256 is
+目前版本為 0.9.0。current-cell、loaded-actor、cross-cell、retry、結構化 dialogue、結構化
+MessageBox，以及 manifest + load-epoch baseline 路徑均已通過 runtime 驗證。
+`/state.player.collision` 提供唯讀 character-controller diagnostics，包括 active Havok shape
+tree、controller bounds 與 proxy contact margins。驗證值為：`bhkCharProxyController` capsule
+radius `0.294322 m`、axis `1.118425 m`、total `1.707070 m`；完整 active-list AABB 為
+`0.614350 × 0.844350 × 1.928800 m`，`keepDistance=0.050000 m`、
+`keepContactTolerance=0.100000 m`。驗證用 DLL SHA-256：
 `9c11b037a803357980946a09ef411038a91fee7f8937ca6e8fcf0141b0d2257c`.
 
 | Route | Runs on | Notes |
 |---|---|---|
-| `GET /ping` | socket thread | Liveness. Answers during load screens on purpose — lets the runner tell "process alive, game busy" from "process dead". |
-| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`. `loaded_actors` walks all four engine process lists, deduplicates them, and exposes cell/FormID/3D-loaded state. Player + game (including dialogue, `game.message_box`, successful-save-load `game.load_epoch`, and `player.collision`'s active Havok capsule/controller bounds/proxy margins) always; the rest opt-in. Two gotchas: `equipped` is **hands only** (armour shows as `worn: true` in `inventory`), and a paused/unfocused game can 503 while the task queue isn't draining — use `/ping` for liveness or launch the client with background-active mode. |
-| `GET /global` | game thread | `?editor_id=...`; live TESGlobal value without parsing noisy console output. |
-| `POST /console` | game thread | `{"cmd": "...", "ref": "0x14"}`. `ref` is optional — it's the console's selected reference, for dotted commands. Output capture is one line and best-effort; see the pitfall below. |
-| `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","scope":"loaded","distance":128}` or `{"form_id":"0x02001234"}`. Exact name or stable runtime reference ID; `scope=loaded` searches Skyrim's actor process lists and movement can cross cells. |
-| `POST /actor/activate` | game thread | Same actor selector. Starts normal player dialogue once the actor is loaded in the player's current cell. |
-| `POST /dialogue/select` | game thread | Select one visible option by exactly one of `text`, zero-based `index`, or runtime `info_form_id`, through the Dialogue Menu's structured callback. |
-| `POST /dialogue/close` | game thread | Ends the active player dialogue. |
-| `POST /messagebox/select` | game thread | `{"text":"OK","message":"Done Writing"}` or `{"index":0}`. Selects one structured modal button; optional exact `message` guard prevents a changed modal from being clicked. |
+| `GET /ping` | socket thread | 即使在 load screen 也回應，用來區分「process alive, game busy」與「process dead」。 |
+| `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`。`loaded_actors` 掃描四個 engine process list、去重，並回傳 cell/FormID/3D-loaded 狀態。`player` 與 `game` 永遠存在，其餘 opt-in。`equipped` **只含雙手**，護甲在 `inventory` 顯示為 `worn: true`。暫停或失焦時 task queue 可能不 drain 而回 503；liveness 請用 `/ping`，或以 background-active 模式啟動 client。 |
+| `GET /global` | game thread | `?editor_id=...`；直接讀 live TESGlobal，不解析嘈雜的 console output。 |
+| `POST /console` | game thread | `{"cmd": "...", "ref": "0x14"}`；`ref` 是選用的 console selected reference。Output 僅一行且為 best-effort。 |
+| `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","scope":"loaded","distance":128}` 或 `{"form_id":"0x02001234"}`；`scope=loaded` 可搜尋 actor process lists 並跨 cell 移動。 |
+| `POST /actor/activate` | game thread | 使用相同 actor selector；actor 載入玩家目前 cell 後啟動一般對話。 |
+| `POST /dialogue/select` | game thread | 以 `text`、zero-based `index`、runtime `info_form_id` 三者之一選擇可見選項。 |
+| `POST /dialogue/close` | game thread | 結束目前玩家對話。 |
+| `POST /messagebox/select` | game thread | `{"text":"OK","message":"Done Writing"}` 或 `{"index":0}`；選用 exact `message` guard 可防止 modal 內容改變後誤按。 |
 
-The raw API loads a save with `{"cmd": "load <save filename without extension>"}`. The QA
-runner does not treat acceptance of that asynchronous command as proof that the save
-loaded: `load_baseline` first verifies a deployment-owned manifest's exact `.ess`/`.skse`
-pair and SHA-256 values, proves the pair is in the selected MO2 profile's local-saves
-directory, records `game.load_epoch`, then requires that epoch to advance and polls
-`/state` for its player/cell/interior/dead and closed MessageBox fingerprint. It was
-previously verified from an unfocused main menu when
-`mo2ctl launch --background-active` temporarily enables Skyrim's `bAlwaysActive`;
-`qa_runner` does this by default and restores the original INI on kill.
+### Baseline load proof
 
-### 0.8.0 live acceptance and `kPostLoadGame` payload pitfall (2026-08-16)
+Raw API 以 `{"cmd": "load <save filename without extension>"}` 載入存檔，但非同步 command
+被接受不代表載入成功。`load_baseline` 先驗證 deployment-owned manifest 中 `.ess`/`.skse`
+pair 與 SHA-256，確認檔案位於所選 MO2 profile 的 local-saves 目錄，記錄
+`game.load_epoch`，再要求 epoch 前進並輪詢 `/state` 的
+player/cell/interior/dead/closed-MessageBox fingerprint。`qa_runner` 預設以
+`mo2ctl launch --background-active` 暫時啟用 `bAlwaysActive`，kill 時還原原始 INI。
 
-The first deployment exposed an incorrect assumption in the new epoch hook. SKSE's save
-hook sends the post-load result as scalar `(void*)result` with `dataLen == 1`; it is not a
-pointer to a readable `bool`. Dereferencing success value `1` therefore crashed at address
-`0x1` during `kPostLoadGame`. The handler now converts `data` to `uintptr_t` and advances
-the epoch only when the length is exactly `sizeof(bool)` and the scalar value is `1`.
-Compile-time checks cover success, failure, malformed value, and malformed length. The
-dispatch contract is visible in upstream
-[`skse64/Hooks_SaveLoad.cpp`](https://github.com/ianpatt/skse64/blob/master/skse64/Hooks_SaveLoad.cpp).
+SKSE 的 `kPostLoadGame` payload 是 scalar `(void*)result`，`dataLen == 1`，不是可解參考的
+`bool*`；把 success value `1` 當指標會在 `0x1` crash。Handler 必須轉成 `uintptr_t`，且只在
+長度正好為 `sizeof(bool)`、scalar value 為 `1` 時前進 epoch。Compile-time checks 涵蓋
+success、failure、malformed value 與 malformed length；upstream contract 見
+[`skse64/Hooks_SaveLoad.cpp`](https://github.com/ianpatt/skse64/blob/master/skse64/Hooks_SaveLoad.cpp)。
+修正版 DLL SHA-256 為
+`be09f146a2771f5c6e84f21be2f2bd3191eecaa8b685836ea751af04eb152051`；`/ping` 版本來自
+CMake `PROJECT_VERSION`。
 
-The repaired DLL's SHA-256 is
-`be09f146a2771f5c6e84f21be2f2bd3191eecaa8b685836ea751af04eb152051`.
-The external `ModpackKRDev0A` manifest preflight and live spec then passed 4/4 in 20.8s:
-`/ping` reported `0.8.0`, the exact `.ess`/`.skse` pair matched, load epoch advanced
-`0 -> 1`, the declared player/cell/interior/dead/MessageBox fingerprint matched, and both
-asserted runtime plugins were present. `/ping` now receives its version from CMake's
-`PROJECT_VERSION`, avoiding a second hard-coded version.
+`game.load_epoch` 只證明成功載入；若規格要求沒有延遲 modal，仍須在 load 後加入明確
+observation window。`include=plugins` 回傳 engine 實際解析的 load order，應以此驗證安裝；
+`plugins.txt` 只代表請求狀態。`index` 為 FormID 的實際 prefix：full plugin `0x00`–`0xFD`，
+light plugin `0xFE000`+。
 
-One timing nuance remains: `Done Writing` may be posted after the immediate post-load
-fingerprint already observed a closed MessageBox. The exact-message bridge guard can
-dismiss it, but a QA spec that promises no delayed modal needs an explicit observation
-window after load; the epoch proof alone makes no such promise.
+### 結構化 MessageBox 與 actor 操作
 
-`include=plugins` returns the load order **as the engine resolved it**, which is the
-thing to assert against after installing a mod — `plugins.txt` says what was asked for,
-this says what happened. `index` is the byte a FormID actually carries (`0x00`–`0xFD`
-for full plugins, `0xFE000`+ for light ones), so it doubles as the FormID prefix.
+MessageBox 與 dialogue 都走 Skyrim 行程內的結構化 callback，不使用 `xdotool`、keyboard
+event、mouse coordinate 或 generic focused-window 操作：
 
-Not built yet: `POST /screenshot`, `POST /input` — both deferred, see plan decision D6.
+- `GET /state` 的 `game.message_box` 提供 `open`、`ready`、message text 與依顯示順序排列的
+  buttons；Skyrim stock MessageBox 沒有獨立 title。
+- `POST /messagebox/select` 接受一個 `text` 或 zero-based `index`；exact `message` guard
+  讓 read-and-select race-safe。
+- Python client 與 qa.json runner 提供 `select_message_box`，MCP 提供 `qa_message_box`；
+  `qa_wait` / `assert_state` 可等待任一 `game.message_box` 欄位。
+- Scaleform 結構缺失、message 不符、text 不存在或重複、index 無效時一律 fail closed，並列出
+  可見選項。
 
-### Structured MessageBox control (0.7.0; live-verified 2026-08-12)
-
-Observed live on 2026-08-11 while automating the ModForge navmesh P3 acceptance: after
-`coc WhiterunBanneredMare`, **ini Editor MCM** opened a modal with the text
-`Done Writing` and an `OK` button. The exact source is its loose
-`Scripts/Source/CustomIniEditorMCM.psc:45`: `OnUpdate()` calls
-`Debug.MessageBox("Done Writing")`. `GET /state` exposed only
-`game.menus_open: ["MessageBoxMenu", ...]`; the modal paused game time and every actor,
-but the bridge could neither read its text/buttons nor dismiss it. The QA run therefore
-looked like a navmesh/AI failure until a human identified the modal on screen.
-
-0.7.0 implements the same structured, in-process pattern already used by dialogue; it
-does not use `xdotool`, keyboard events, mouse coordinates, or a generic focused-window
-operation:
-
-- `GET /state` exposes `game.message_box` with `open`, `ready`, message text, and visible
-  buttons in display order. Skyrim's stock MessageBox has no separate title.
-- `POST /messagebox/select` accepts exactly one button `text` or zero-based `index`; an
-  optional exact `message` guard makes the read-and-select operation race-safe.
-- `select_message_box` exists in the Python client and qa.json runner, `qa_message_box`
-  in MCP, and the existing `qa_wait` / `assert_state` predicates can wait on any
-  `game.message_box` field.
-- Any missing Scaleform structure, message mismatch, missing/duplicate text, or bad index
-  fails closed and reports the visible choices.
-
-The implementation discovers the active movie object by its `MessageButtons` array rather
-than assuming a particular root clip name, then dispatches the menu's registered native
-`buttonPress` callback. The field/callback contract comes from the reconstructed stock
+實作以 `MessageButtons` array 找 active movie object，再 dispatch menu 註冊的 native
+`buttonPress` callback；contract 來自 stock
 [`MessageBox.as`](https://github.com/Mardoxx/skyrimui/blob/master/src/messagebox/MessageBox.as)
-and CommonLibSSE-NG's `RE/M/MessageBoxMenu.h`. The 2026-08-12 acceptance below proved the
-deployed SkyUI/Extended Vanilla Menus stack exposes that contract.
+與 CommonLibSSE-NG `RE/M/MessageBoxMenu.h`。
 
-Live acceptance reset `CustomIniEditorMCMQuest`, asked SkyUI to re-register its MCMs, and
-reproduced the exact `Done Writing` modal deterministically. `/state` returned
-`ready: true` and one `{index: 0, text: "OK"}` button. A deliberately wrong message guard
-failed closed without dismissing it; selecting `OK` by exact text dismissed it and game
-time resumed; a second reproduction dismissed by index 0. The existing generic
-living-NPC/dialogue regression then passed 31/31 unchanged, including selecting Falas's
-parley line and observing its TopicInfo script change favor from 0 to 5.
+Actor selector 預設 `scope=cell` 與 exact name；FormID selector 可消除同名歧義，
+`scope=loaded` 搜尋四個 `ProcessLists` bucket。跨 cell `move_to` 先用 Skyrim native
+reference-to-reference move，再套 requested standing offset。回傳物件含 `cell_form_id`、
+`worldspace_form_id`、`loaded_3d`、`disabled`，可區分「known reference」與「ready to talk」。
+實際 load order 能否解析 persistent unloaded reference 仍須 live QA；找不到時 API 明確回傳
+not-found。`loaded_actors.distance` 只有在 `same_cell` 為 true 時具有幾何意義。
 
-The semantic actor/dialogue path was verified end to end on 2026-08-10: enumerate the
-current cell, find and move beside Falas, start dialogue, read the displayed options,
-select parley by exact text, and observe its TopicInfo script change a TESGlobal from
-0 to 5. No screen capture, OCR, keyboard, or mouse event participates in that chain.
+Linux 端位於 [`client/`](client/README.md)：`mo2ctl.py` 安裝、移除 mod 並啟動遊戲，
+`qa_runner.py` 執行 [`qa.json`](client/QA-SCHEMA.md)，`qa_mcp.py` 暴露常用 MCP tools。
+現役文件仍引用的階段報告保留於原路徑：
 
-0.6.0 extends that path without changing the verified defaults: `scope=cell` and exact
-name still behave as before. FormID selectors remove same-name ambiguity; `scope=loaded`
-can find actors in the four `ProcessLists` buckets; a different-cell `move_to` first uses
-Skyrim's native reference-to-reference move, then applies the requested standing offset.
-The returned actor object states `cell_form_id`, `worldspace_form_id`, `loaded_3d`, and
-`disabled`, so callers can distinguish "known reference" from "ready to talk". Live QA
-must still establish which persistent unloaded references Skyrim can resolve in a given
-load order; the API reports a clean not-found instead of pretending every NPC exists.
-For `loaded_actors`, `distance` is geometrically meaningful only when `same_cell` is true;
-different interiors do not share a useful coordinate space.
-
-### 0.6.0 live acceptance (2026-08-10)
-
-- Existing livingNpcs generic anchor/parley regression remained **31/31 PASS**.
-- `loaded_actors` returned 1,024 process-list actors at the requested limit with no
-  duplicate runtime FormIDs.
-- Falas was moved to and activated by runtime reference FormID; the parley TopicInfo was
-  selected once by display index and once by `info_form_id`. Both executions changed the
-  favor TESGlobal from 0 to 5, proving the TIF ran.
-- From the Bannered Mare, moving to unloaded persistent reference Lucan Valerius crossed
-  into Riverwood Trader; `loaded_3d` changed from false to true, state converged in 0.3s,
-  and dialogue opened by FormID.
-- `scope=loaded` name lookup followed Falas from Riverwood to his live exterior package
-  location (`WhiterunWatchtowerExterior02`) rather than assuming his configured anchor.
-- A deliberately delayed Riverwood transition made a current-cell Bjorn move fail four
-  times and succeed on attempt five; MCP `qa_wait` then confirmed cell, actor, and dialogue
-  conditions without fixed sleeps.
-
-The Linux side of all this lives in [`client/`](client/README.md): `mo2ctl.py` installs
-and removes mods and starts the game with no MO2 GUI anywhere in the loop, `qa_runner.py`
-executes a whole test from one [`qa.json`](client/QA-SCHEMA.md), and `qa_mcp.py` exposes
-the frequently-called half of that to Claude as MCP tools.
+- [P1 Archive + FOMOD report](client/P1-ARCHIVE-FOMOD-REPORT.md)
+- [P2 Profile Git report](client/P2-PROFILE-GIT-REPORT.md)
+- [P3 Static Gates report](client/P3-STATIC-GATES-REPORT.md)
 
 ## Design notes
 
-**Port 5099, loopback only.** `INADDR_LOOPBACK`, never `INADDR_ANY` — this thing executes
-console commands, so it must not be reachable from the network. The Linux client hardcodes
-the same port; changing it is a two-sided edit.
+**Port 5099，只聽 loopback。** 必須使用 `INADDR_LOOPBACK`，不得使用 `INADDR_ANY`；此服務可
+執行 console command，不能讓網路存取。Linux client 也 hardcode 5099，改 port 必須兩端同步。
 
-**Two threads, one seam.** The accept loop runs on its own thread; nearly every `RE::` read
-is only safe on the game's main thread. Routes that need game state hand a callable to
-`GameThread::Run`, which marshals through SKSE's task interface and **times out** (3s
-default) — during a load screen the task queue may not drain at all, and a blocked handler
-would wedge the socket thread and make the bridge look dead. Timeout answers 503; the
-runner retries.
+**兩個 thread，一個 seam。** Accept loop 使用獨立 thread；幾乎所有 `RE::` read 只能在 game
+main thread 安全執行。需要 game state 的 route 將 callable 交給 `GameThread::Run`，透過 SKSE
+task interface marshal，預設 timeout 為 3 秒。Load screen 期間 task queue 可能完全不 drain；
+timeout 回 503，由 runner retry，避免 handler 卡住 socket thread。
 
-**Hand-rolled HTTP, no cpp-httplib.** The surface is a handful of localhost JSON routes
-called by one client. Every dependency added here has to survive the clang-cl + lld-link +
-xwin cross-compile; ~200 lines of winsock is cheaper than that risk. One connection at a
-time, `Connection: close`, 1 MiB request cap.
+**Hand-rolled HTTP，不使用 cpp-httplib。** 介面只有少量 localhost JSON route 與單一 client；
+新增 dependency 都必須通過 clang-cl + lld-link + xwin cross-compile。服務一次處理一個
+connection，使用 `Connection: close`，request 上限 1 MiB。
 
-**No clean shutdown path.** SKSE has no unload message; the thread lives until the process
-dies. `Http::Stop()` exists for completeness and is currently unused.
+**沒有 clean shutdown path。** SKSE 沒有 unload message，thread 活到 process 結束；
+`Http::Stop()` 目前未使用。
 
 ## Pitfall: do not hook `ConsoleLog::VPrint`
 
-Tried on 2026-08-02. **It crashed the game on startup**, ~6.6s in, during Papyrus VM
-init:
+**禁止 hook `ConsoleLog::VPrint`。** 在有其他 console plugin 的 load order 中，五-byte
+prologue detour 會互相覆寫；曾於 Papyrus VM init 約 6.6 秒時 crash：
 
 ```
 Unhandled exception "EXCEPTION_ACCESS_VIOLATION" at 0x000158B3D6AE
@@ -202,88 +123,55 @@ Access Violation: Tried to execute memory at 0x000158B3D6AE
 [ 2][S] 0x6FFFE9819F94   ConsoleUtilSSE.dll+00B9F94
 ```
 
-The detour itself installed fine and got called; it blew up **calling through to the
-original**. `write_branch<5>` saves the 5 bytes it overwrites and jumps back to them, so
-"jump to an unreadable address" means those saved bytes weren't the real prologue any more.
+`write_branch<5>` 只保存被覆寫的 5 bytes；當 `MoreInformativeConsole.dll`、
+`ConsoleUtilSSE.dll` 等 plugin 也 patch 同一位置時，保存的「原始」內容可能已是別人的半段
+`jmp`。若需改善 output capture，依序選擇：讀更多 `ConsoleLog` state、使用已持有 hook 且有
+API 的 plugin、hook 無人競爭的 call site；不得競爭 popular engine function 的 prologue。
 
-This load order already contains **`MoreInformativeConsole.dll`** and **`ConsoleUtilSSE.dll`**,
-both of which sit on the console output path. Two plugins branch-patching the same five
-bytes is enough: the second one overwrites the first's patch, and the first's saved
-"original bytes" are now half of somebody else's `jmp`.
+目前做法是由 `Console::Execute` 寫入 sentinel、執行 command，再讀
+`ConsoleLog::lastMessage`；若仍是 sentinel 就回空值。限制如下：
 
-Generalise from this, don't just avoid this one function: **a five-byte prologue detour on a
-popular engine function is not safe in a real 100-mod load order.** If output capture has to
-get better than one line, the options in order of preference are (a) read more of
-`ConsoleLog`'s own state, (b) go through a plugin that already owns the hook and exposes an
-API, (c) hook a call site that no one else wants — never (d) race other plugins for the same
-prologue.
+- **只保留一行。** `sqs` 與 `help` 只回最後一行。
+- **Sentinel 只適用快速 command。** `load`、`coc` 仍可能混入其他 mod 的輸出，例如
+  `GetInFaction >> 0.00` 或 `GetNumericPackageData >> 360.00`。
 
-What ships instead: `Console::Execute` prints a sentinel line, runs the command, then reads
-`ConsoleLog::lastMessage` and returns it unless the sentinel is still sitting there. Plain
-struct member access, nothing to collide with.
-
-The sentinel is not decoration. The first attempt just snapshotted `lastMessage` before and
-after and returned it if it changed — and the test run caught that lying: `load` and `coc`
-print nothing, yet both came back with a line (`GetInFaction >> 0.00`, `IsShieldOut >> 0.00`)
-that another mod had written in between. Something in this load order queries the console at
-high frequency. Comparing against a line we wrote ourselves turns "nothing printed" back into
-an empty result.
-
-Two limits remain, both accepted:
-
-- **One line only.** `sqs` and `help` come back as their last line.
-- **The sentinel only holds for fast commands.** Measured on 0.3.0: `player.additem` and
-  `player.setav` correctly return an empty `output`, but `load` and `coc` still leaked
-  (`GetInFaction >> 0.00`, `GetNumericPackageData >> 360.00`). The longer a command's
-  synchronous span, the more chance a foreign print lands inside it — and that span is a
-  property of the command, not something this code can shrink.
-
-So: **assert on `/state`, not on console output.** Treat the output field as a diagnostic,
-never as the source of truth. `output_captured: true` does not mean the line came from your
-command.
+因此必須 **assert `/state`，不得 assert console output**。Output 只供診斷；
+`output_captured: true` 不代表該行來自你的 command。
 
 ## Pitfall: `winsock2.h` goes *after* CommonLib, never before
 
-The usual Windows advice is "include winsock2.h first, before anything drags in windows.h."
-That is exactly backwards here, and it costs a build if you follow it. CommonLibSSE-NG ships
-its own Win32 re-declarations (`REX::W32`), and `REX/W32/BASE.h` hard-errors on sight of a
-real Windows header:
+一般 Windows 慣例是先 include `winsock2.h`，但本專案相反。CommonLibSSE-NG 自帶 Win32
+re-declarations (`REX::W32`)，`REX/W32/BASE.h` 遇到真正 Windows header 會 hard-error：
 
 ```
 error: Windows API detected. Please move any Windows API includes after CommonLib, or remove them.
 ```
 
-followed by a cascade — `inline constexpr auto MAX_PATH{260u}` can't parse once
-`minwindef.h` has `#define MAX_PATH 260`. So `src/PCH.h` puts `RE/Skyrim.h` first and the
-socket headers after. The reverse order is safe because macros only affect *later* parsing,
-and `REX::W32`'s names are namespaced.
+`minwindef.h` 的 `#define MAX_PATH 260` 也會破壞後續
+`inline constexpr auto MAX_PATH{260u}`。因此 `src/PCH.h` 必須先放 `RE/Skyrim.h`，再放 socket
+headers；macro 只影響後續 parsing，而 `REX::W32` 名稱有 namespace，此順序安全。
 
 ## Build
 
-Linux host, cross-compiled to a Windows DLL — see plan decision D3: this is an internal
-tool, not a player-facing product, so it ships straight from `clang-cl` without going
-through Windows CI. Iteration speed wins.
-
-Requires `xwin` splatted to `~/.xwin-cache` and `VCPKG_ROOT` set:
+Linux host 以 `clang-cl` cross-compile 成 Windows DLL。需要將 `xwin` splat 到
+`~/.xwin-cache` 並設定 `VCPKG_ROOT`：
 
 ```bash
 export VCPKG_ROOT="$HOME/dev/vcpkg" && cmake --preset build-release-clang-cl-linux && cmake --build build/release-clang-cl-linux
 ```
 
-Output: `build/release-clang-cl-linux/AgentBridge.dll`.
+輸出：`build/release-clang-cl-linux/AgentBridge.dll`。
 
-Optional auto-deploy: set `SKYRIM_MODS_FOLDER` (MO2 `mods/` dir) or `SKYRIM_FOLDER` before
-configuring and the post-build step drops the DLL into `SKSE/Plugins/`.
+選用 auto-deploy：configure 前設定 `SKYRIM_MODS_FOLDER`（MO2 `mods/`）或
+`SKYRIM_FOLDER`，post-build step 會將 DLL 放入 `SKSE/Plugins/`。
 
 ## Verifying it works
 
-With the game running:
+遊戲執行時：
 
 ```bash
 curl -s 127.0.0.1:5099/ping && echo && curl -s 127.0.0.1:5099/state
 ```
 
-The `127.0.0.1` reachability across the Proton boundary is not an assumption — it was
-measured on 2026-08-02 with a standalone Win64 probe under both plain wine and Proton 9 +
-pressure-vessel, and the listening socket was confirmed to belong to a `wineserver` inside
-the container. Details in the plan, section "0.1a 實測結果".
+`127.0.0.1` 可跨越 Proton boundary；plain wine 與 Proton 9 + pressure-vessel 均已驗證，
+listening socket 屬於 container 內的 `wineserver`。
