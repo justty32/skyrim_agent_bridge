@@ -2340,6 +2340,13 @@ def cmd_reconcile(env: Env, args) -> dict:
     return result
 
 
+def launch_script_path() -> Path:
+    override = os.environ.get("MO2CTL_LAUNCH_SCRIPT")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[3] / "instance" / "tools" / "launch-mo2.sh"
+
+
 def cmd_launch(env: Env, args) -> dict:
     if game_pids():
         raise Fail("Skyrim is already running (mo2ctl kill first)")
@@ -2351,20 +2358,20 @@ def cmd_launch(env: Env, args) -> dict:
             f"run `mo2ctl select-profile {env.profile}` before launch"
         )
 
+    script = launch_script_path()
+    if not script.is_file():
+        raise Fail(
+            f"MO2 launch script is not a file: {script}; set MO2CTL_LAUNCH_SCRIPT "
+            "or launch manually with `instance/tools/launch-mo2.sh --skse`"
+        )
+
     background_active = None
     if getattr(args, "background_active", False):
         if mo2_pids():
             raise Fail("MO2 is already running (mo2ctl kill --mo2 first)")
         background_active = enable_background_active(env)
 
-    # protontricks-launch runs the exe inside app 489830's Proton prefix, which is
-    # where MO2 itself lives — usvfs needs MO2 and the game in one wine session.
-    # `moshortcut://:SKSE` is MO2's own name for the customExecutables entry, so
-    # this is the same path the GUI's Run button takes.
-    cmd = [
-        "protontricks-launch", "--appid", STEAM_APPID,
-        str(env.mo2_exe), f"moshortcut://:{args.shortcut}",
-    ]
+    cmd = [str(script), "--shortcut", args.shortcut]
     log_path = Path(os.environ.get("MO2CTL_LOG_DIR", "/tmp")) / "mo2ctl-launch.log"
     try:
         with open(log_path, "ab") as log:
