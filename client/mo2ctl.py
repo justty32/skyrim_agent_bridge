@@ -1307,7 +1307,7 @@ def add_plugins(
 ) -> list[str]:
     if after and before:
         raise Fail("plugin placement cannot specify both after and before")
-    if not names and not after and not before:
+    if not names:
         return []
 
     plugins = read_file(env.plugins)
