@@ -171,6 +171,24 @@ class Mo2CtlArchiveTests(unittest.TestCase):
 
         self.assertTrue(inspected["has_fomod"])
 
+    def test_lone_data_level_directory_is_kept_as_mod_root(self) -> None:
+        archive = self.zipfile("LoneSkse.zip", {
+            "SKSE/Plugins/x.dll": "",
+        })
+
+        mo2ctl.cmd_install(self.env, self.args(archive, name="LoneSkse"))
+
+        self.assertTrue((self.root / "mods" / "LoneSkse" / "SKSE" / "Plugins" / "x.dll").is_file())
+
+    def test_wrapper_around_data_level_directory_is_removed(self) -> None:
+        archive = self.zipfile("WrappedSkse.zip", {
+            "Wrapper/SKSE/Plugins/x.dll": "",
+        })
+
+        mo2ctl.cmd_install(self.env, self.args(archive, name="WrappedSkse"))
+
+        self.assertTrue((self.root / "mods" / "WrappedSkse" / "SKSE" / "Plugins" / "x.dll").is_file())
+
     def test_unsupported_conditional_fomod_handoffs(self) -> None:
         archive = self.zipfile("Conditional.zip", {
             "fomod/ModuleConfig.xml": """

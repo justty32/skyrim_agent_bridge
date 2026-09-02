@@ -1560,7 +1560,8 @@ def candidate_mod_roots(root: Path) -> list[Path]:
 
 def choose_mod_root(root: Path) -> Path:
     children = [p for p in root.iterdir() if not p.name.startswith(".")]
-    if (len(children) == 1 and children[0].is_dir()
+    if (not looks_like_mod_root(root)
+            and len(children) == 1 and children[0].is_dir()
             and children[0].name.lower() not in {"data", "fomod"}):
         root = children[0]
     if find_case_insensitive(root, "fomod/ModuleConfig.xml"):
