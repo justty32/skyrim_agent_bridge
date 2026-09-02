@@ -1263,8 +1263,8 @@ def place_mod(tf: TextFile, name: str, enabled: bool, priority: str) -> str:
 # plugins.txt / loadorder.txt
 #
 # plugins.txt marks active plugins with a leading `*`; loadorder.txt lists every
-# known plugin bare, in order. Appending puts the new plugin last, which is where
-# a mod under test wants to be: later wins.
+# known plugin bare, in order. New plugins append unless an install/enable call
+# supplies an anchor placement.
 # ---------------------------------------------------------------------------
 
 
@@ -1275,32 +1275,82 @@ def plugin_files(mod_dir: Path) -> list[str]:
     )
 
 
-def add_plugins(env: Env, names: list[str]) -> list[str]:
-    if not names:
+def plugin_line_index(tf: TextFile, name: str) -> int | None:
+    target = name.lower()
+    for i, line in enumerate(tf.lines):
+        if line and not line.startswith("#") and line.lstrip("*").strip().lower() == target:
+            return i
+    return None
+
+
+def plugin_insert_index(
+    tf: TextFile,
+    *,
+    after: str | None,
+    before: str | None,
+) -> int:
+    anchor = after or before
+    if anchor is None:
+        return len(tf.lines)
+    idx = plugin_line_index(tf, anchor)
+    if idx is None:
+        raise Fail(f"plugin anchor not found in {tf.path.name}: {anchor}")
+    return idx + 1 if after else idx
+
+
+def add_plugins(
+    env: Env,
+    names: list[str],
+    *,
+    after: str | None = None,
+    before: str | None = None,
+) -> list[str]:
+    if after and before:
+        raise Fail("plugin placement cannot specify both after and before")
+    if not names and not after and not before:
         return []
-    added = []
 
     plugins = read_file(env.plugins)
+    order = read_file(env.loadorder)
+    plugins_at = plugin_insert_index(plugins, after=after, before=before)
+    order_at = plugin_insert_index(order, after=after, before=before)
+
     have = {ln.lstrip("*").strip().lower() for ln in plugins.lines if ln and not ln.startswith("#")}
-    for name in names:
-        if name.lower() in have:
-            continue
-        plugins.lines.append("*" + name)
-        added.append(name)
+    added = [name for name in names if name.lower() not in have]
     if added:
+        plugins.lines[plugins_at:plugins_at] = ["*" + name for name in added]
         write_file(plugins)
 
-    order = read_file(env.loadorder)
     have = {ln.strip().lower() for ln in order.lines if ln and not ln.startswith("#")}
-    changed = False
-    for name in names:
-        if name.lower() not in have:
-            order.lines.append(name)
-            changed = True
-    if changed:
+    order_added = [name for name in names if name.lower() not in have]
+    if order_added:
+        order.lines[order_at:order_at] = order_added
         write_file(order)
 
     return added
+
+
+def priority_plugin_anchor(env: Env, priority: str) -> tuple[str | None, str | None]:
+    direction, sep, mod_name = priority.partition(":")
+    if sep != ":" or direction not in {"after", "before"}:
+        return None, None
+    mod_dir = env.mods / mod_name
+    if not mod_dir.is_dir():
+        return None, None
+    mod_plugins = {name.lower() for name in plugin_files(mod_dir)}
+    if not mod_plugins:
+        return None, None
+    profile_plugins = read_file(env.plugins)
+    matches = [
+        line.lstrip("*").strip()
+        for line in profile_plugins.lines
+        if line and not line.startswith("#") and line.lstrip("*").strip().lower() in mod_plugins
+    ]
+    if not matches:
+        return None, None
+    if direction == "after":
+        return matches[-1], None
+    return None, matches[0]
 
 
 def remove_plugins(env: Env, names: list[str]) -> list[str]:
@@ -1917,7 +1967,14 @@ def cmd_install(env: Env, args) -> dict:
         write_file(tf)
 
         plugins = plugin_files(dest)
-        activated = add_plugins(env, plugins) if not args.no_enable else []
+        plugin_after = getattr(args, "plugin_after", None)
+        plugin_before = None
+        if plugin_after is None:
+            plugin_after, plugin_before = priority_plugin_anchor(env, priority)
+        activated = (
+            add_plugins(env, plugins, after=plugin_after, before=plugin_before)
+            if not args.no_enable else []
+        )
         archives = bsa_files(dest)
         archives_added = add_archives(env, archives, plugins) if not args.no_enable else []
     finally:
@@ -2200,7 +2257,9 @@ def cmd_enable(env: Env, args) -> dict:
     result = set_mod_state(env, args.name, True)
     plugins = plugin_files(env.mods / args.name) if (env.mods / args.name).is_dir() else []
     output = {"mod": args.name, "enabled": True, "modlist": result,
-              "plugins_activated": add_plugins(env, plugins)}
+              "plugins_activated": add_plugins(
+                  env, plugins, after=getattr(args, "plugin_after", None),
+              )}
     output["profile_commit"] = commit_profile(
         env, ProfileEdit(), source="mo2ctl:enable",
     )
@@ -2420,6 +2479,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force", action="store_true", help="replace an existing folder / ignore the running-process lock")
     s.add_argument("--priority", default="bottom",
                    help="modlist placement: bottom, top, before:<mod>, or after:<mod> (default: bottom)")
+    s.add_argument("--plugin-after", help="place new plugins immediately after this plugin")
     s.add_argument("--fomod-choices", help="replay choices JSON written by `mo2ctl inspect --write-choices`")
     s.add_argument("--version", default="0.0.0")
     s.add_argument("--source-url", help="where the archive came from, for manifest.json")
@@ -2496,6 +2556,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub_add("enable", "turn a mod on in the profile")
     s.add_argument("name")
+    s.add_argument("--plugin-after", help="place new plugins immediately after this plugin")
     s.add_argument("--force", action="store_true")
     s.set_defaults(func=cmd_enable)
 
