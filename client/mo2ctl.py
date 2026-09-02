@@ -22,6 +22,7 @@ the rest of the toolchain is mid-rebuild.
   mo2ctl try-pass [-m MESSAGE]
   mo2ctl enable <name>
   mo2ctl disable <name>
+  mo2ctl reconcile [--apply] [--source TAG] [--fail-on-drift]
   mo2ctl launch [--wait SECONDS] [--no-wait] [--background-active]
   mo2ctl kill [--mo2]
 
@@ -59,6 +60,7 @@ ARCHIVE_SUFFIXES = (".zip", ".7z", ".rar")
 BSA_SUFFIXES = (".bsa", ".ba2")
 FOMOD_CHOICES_FORMAT = "mo2ctl-fomod-choices-v1"
 PROFILE_MANIFEST_FORMAT = "mo2ctl-profile-manifest-v1"
+PROFILE_STATE_FORMAT = "mo2ctl-profile-state-v1"
 STATIC_GATE_FORMAT = "mo2ctl-static-gates-v1"
 PROFILE_MAIN_BRANCH = "main"
 DEFAULT_HOUSECARL_SERVER = Path.home() / "tools/housecarl/server/housecarl-mcp"
@@ -107,6 +109,10 @@ class Env:
     @property
     def manifest(self) -> Path:
         return self.profiles_repo / "manifest.json"
+
+    @property
+    def profile_state(self) -> Path:
+        return self.profiles_repo / "profile-state.json"
 
     @property
     def modlist(self) -> Path:
@@ -292,11 +298,136 @@ def read_manifest(env: Env) -> dict:
     return data
 
 
-def write_manifest(env: Env, data: dict) -> None:
+def write_manifest(env: Env, data: dict, *, source: str) -> None:
     data["format"] = PROFILE_MANIFEST_FORMAT
     data["updated_at"] = utc_stamp()
-    env.manifest.write_text(json.dumps(data, indent=1, ensure_ascii=False, sort_keys=True) + "\n",
-                            encoding="utf-8")
+    data["updated_by"] = source
+    atomic_write(
+        env.manifest,
+        (json.dumps(data, indent=1, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"),
+    )
+
+
+@dataclass
+class ProfileEdit:
+    """The in-memory provenance result of one profile mutation."""
+
+    manifest: dict | None = None
+    manifest_skipped: str | None = None
+
+
+def profile_diff(env: Env) -> dict:
+    """Compare the case-sensitive enabled mod set with the provenance ledger."""
+    entries = dict(modlist_entries(read_file(env.modlist)))
+    modlist_names = set(entries)
+    enabled = {name for name, is_enabled in entries.items() if is_enabled}
+    manifest_mods = read_manifest(env)["mods"]
+    manifest_names = set(manifest_mods)
+    return {
+        "modlist_enabled": len(enabled),
+        "manifest_mods": len(manifest_names),
+        "only_in_modlist": sorted(enabled - manifest_names),
+        "only_in_manifest": sorted(manifest_names - modlist_names),
+        "enabled_mismatch": sorted(
+            name for name in manifest_names & modlist_names
+            if manifest_mods[name].get("enabled") != entries[name]
+        ),
+    }
+
+
+def _profile_file_state(path: Path) -> dict:
+    tf = read_file(path)
+    mtime = datetime.fromtimestamp(path.stat().st_mtime, UTC).replace(microsecond=0)
+    return {
+        "sha256": sha256_file(path),
+        "mtime": mtime.isoformat().replace("+00:00", "Z"),
+        "lines": len(tf.lines),
+    }
+
+
+def build_profile_state(env: Env, *, source: str,
+                        manifest_dirty: str | None = None) -> dict:
+    """Build a live profile checkpoint without writing it."""
+    modlist = read_file(env.modlist)
+    enabled = sorted(name for name, active in modlist_entries(modlist) if active)
+    plugins = read_file(env.plugins)
+    loadorder = read_file(env.loadorder)
+    diff = profile_diff(env)
+    return {
+        "format": PROFILE_STATE_FORMAT,
+        "profile": env.profile,
+        "checkpoint_at": utc_stamp(),
+        "source": source,
+        "manifest_dirty": manifest_dirty,
+        "manifest_sha256": sha256_file(env.manifest),
+        "files": {
+            "modlist": _profile_file_state(env.modlist),
+            "plugins": _profile_file_state(env.plugins),
+            "loadorder": _profile_file_state(env.loadorder),
+        },
+        "enabled_count": len(enabled),
+        "enabled": enabled,
+        "plugin_order": [
+            line[1:].strip() for line in plugins.lines if line.startswith("*")
+        ],
+        "load_order": [
+            line.strip() for line in loadorder.lines
+            if line.strip() and not line.lstrip().startswith("#")
+        ],
+        "unregistered": diff["only_in_modlist"],
+        "stale": diff["only_in_manifest"],
+        "enabled_mismatch": diff["enabled_mismatch"],
+    }
+
+
+def write_profile_state(env: Env, state: dict) -> None:
+    """Atomically write profiles/profile-state.json."""
+    atomic_write(
+        env.profile_state,
+        (json.dumps(state, indent=1, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"),
+    )
+
+
+def commit_profile(env: Env, edit: ProfileEdit, *, source: str) -> dict:
+    """Synchronize provenance and write the profile's live checkpoint."""
+    original = read_manifest(env)
+    manifest = edit.manifest or original
+    manifest_changed = manifest != original
+    entries = dict(modlist_entries(read_file(env.modlist)))
+    synced = []
+    for name, entry in manifest["mods"].items():
+        if name in entries and entry.get("enabled") != entries[name]:
+            entry["enabled"] = entries[name]
+            synced.append(name)
+
+    manifest_written = manifest_changed or bool(synced)
+    if manifest_written:
+        write_manifest(env, manifest, source=source)
+
+    state = build_profile_state(
+        env,
+        source=source,
+        manifest_dirty=edit.manifest_skipped,
+    )
+    write_profile_state(env, state)
+    state_summary = {
+        "format": state["format"],
+        "profile": state["profile"],
+        "checkpoint_at": state["checkpoint_at"],
+        "source": state["source"],
+        "manifest_dirty": state["manifest_dirty"],
+        "manifest_sha256": state["manifest_sha256"],
+        "files": state["files"],
+        "enabled_count": state["enabled_count"],
+        "unregistered_count": len(state["unregistered"]),
+        "stale_count": len(state["stale"]),
+        "enabled_mismatch_count": len(state["enabled_mismatch"]),
+    }
+    return {
+        "manifest_written": manifest_written,
+        "manifest_synced": sorted(synced),
+        "state": state_summary,
+    }
 
 
 def manifest_from_git(env: Env, ref: str) -> dict:
@@ -314,9 +445,8 @@ def manifest_from_git(env: Env, ref: str) -> dict:
     return data
 
 
-def update_manifest_for_install(env: Env, result: dict, resolved: "ResolvedSource",
-                                args) -> dict:
-    manifest = read_manifest(env)
+def update_manifest_for_install(env: Env, manifest: dict, result: dict,
+                                resolved: "ResolvedSource", args) -> dict:
     source = Path(args.source).expanduser()
     digest = sha256_file(source)
     entry = {
@@ -338,16 +468,13 @@ def update_manifest_for_install(env: Env, result: dict, resolved: "ResolvedSourc
         "installed_at": utc_stamp(),
     }
     manifest["mods"][result["installed"]] = entry
-    write_manifest(env, manifest)
     return entry
 
 
-def remove_manifest_entry(env: Env, name: str) -> bool:
-    manifest = read_manifest(env)
+def remove_manifest_entry(manifest: dict, name: str) -> bool:
     if name not in manifest["mods"]:
         return False
     del manifest["mods"][name]
-    write_manifest(env, manifest)
     return True
 
 
@@ -1809,8 +1936,15 @@ def cmd_install(env: Env, args) -> dict:
         "fomod_choices": "mo2ctl-fomod-choices.json" if resolved.fomod_choices else None,
         "warnings": warnings,
     }
-    if not getattr(args, "no_manifest", False):
-        result["manifest"] = update_manifest_for_install(env, result, resolved, args)
+    if getattr(args, "no_manifest", False):
+        edit = ProfileEdit(manifest_skipped="--no-manifest")
+    else:
+        manifest = read_manifest(env)
+        result["manifest"] = update_manifest_for_install(
+            env, manifest, result, resolved, args,
+        )
+        edit = ProfileEdit(manifest=manifest)
+    result["profile_commit"] = commit_profile(env, edit, source="mo2ctl:install")
     return result
 
 
@@ -1851,9 +1985,15 @@ def cmd_uninstall(env: Env, args) -> dict:
     if idx is None and not removed_files and not removed_plugins and not removed_archives:
         raise Fail(f"nothing to uninstall: {name} is not in the modlist and has no folder")
 
-    manifest_removed = False if getattr(args, "keep_manifest", False) else remove_manifest_entry(env, name)
+    if getattr(args, "keep_manifest", False):
+        manifest_removed = False
+        edit = ProfileEdit(manifest_skipped="--keep-manifest")
+    else:
+        manifest = read_manifest(env)
+        manifest_removed = remove_manifest_entry(manifest, name)
+        edit = ProfileEdit(manifest=manifest)
 
-    return {
+    result = {
         "uninstalled": name,
         "removed_from_modlist": idx is not None,
         "removed_plugins": removed_plugins,
@@ -1861,6 +2001,8 @@ def cmd_uninstall(env: Env, args) -> dict:
         "removed_files": removed_files,
         "removed_manifest": manifest_removed,
     }
+    result["profile_commit"] = commit_profile(env, edit, source="mo2ctl:uninstall")
+    return result
 
 
 def cmd_profile_status(env: Env, args) -> dict:
@@ -2007,13 +2149,21 @@ def cmd_try_fail(env: Env, args) -> dict:
     if branch != PROFILE_MAIN_BRANCH:
         git_profiles(env, ["branch", "-D", branch])
 
-    return {
+    result = {
         "failed": branch,
         "checked_out": PROFILE_MAIN_BRANCH,
         "deleted_branch": branch if branch != PROFILE_MAIN_BRANCH else None,
         "uninstalled": uninstall_results,
         "head": git_head(env),
     }
+    result["profile_commit"] = commit_profile(
+        env, ProfileEdit(), source="mo2ctl:try-fail",
+    )
+    # profile-state.json is operational state and is expected to be ignored by
+    # the profile repo.  Older repos without that ignore rule must still finish
+    # try-fail clean, matching the command's existing rollback guarantee.
+    git_profiles(env, ["clean", "-f", "--", env.profile_state.name])
+    return result
 
 
 def cmd_try_pass(env: Env, args) -> dict:
@@ -2048,16 +2198,86 @@ def cmd_enable(env: Env, args) -> dict:
     require_writable(args)
     result = set_mod_state(env, args.name, True)
     plugins = plugin_files(env.mods / args.name) if (env.mods / args.name).is_dir() else []
-    return {"mod": args.name, "enabled": True, "modlist": result,
-            "plugins_activated": add_plugins(env, plugins)}
+    output = {"mod": args.name, "enabled": True, "modlist": result,
+              "plugins_activated": add_plugins(env, plugins)}
+    output["profile_commit"] = commit_profile(
+        env, ProfileEdit(), source="mo2ctl:enable",
+    )
+    return output
 
 
 def cmd_disable(env: Env, args) -> dict:
     require_writable(args)
     result = set_mod_state(env, args.name, False)
     plugins = plugin_files(env.mods / args.name) if (env.mods / args.name).is_dir() else []
-    return {"mod": args.name, "enabled": False, "modlist": result,
-            "plugins_deactivated": remove_plugins(env, plugins)}
+    output = {"mod": args.name, "enabled": False, "modlist": result,
+              "plugins_deactivated": remove_plugins(env, plugins)}
+    output["profile_commit"] = commit_profile(
+        env, ProfileEdit(), source="mo2ctl:disable",
+    )
+    return output
+
+
+def cmd_reconcile(env: Env, args) -> dict:
+    """Report profile drift and optionally refresh provenance/checkpoint state."""
+    diff = profile_diff(env)
+    checkpoint_state = None
+    if env.profile_state.is_file():
+        try:
+            checkpoint_state = json.loads(env.profile_state.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise Fail(f"cannot parse profile state: {env.profile_state}: {exc}") from exc
+
+    checkpoint = None
+    changed_files = []
+    if checkpoint_state is not None:
+        checkpoint = {
+            "checkpoint_at": checkpoint_state.get("checkpoint_at"),
+            "source": checkpoint_state.get("source"),
+        }
+        previous_files = checkpoint_state.get("files", {})
+        for name, path in (
+            ("modlist", env.modlist),
+            ("plugins", env.plugins),
+            ("loadorder", env.loadorder),
+        ):
+            previous = previous_files.get(name, {})
+            if sha256_file(path) != previous.get("sha256"):
+                changed_files.append(name)
+
+    result = {
+        "modlist_enabled": diff["modlist_enabled"],
+        "manifest_mods": diff["manifest_mods"],
+        "only_in_modlist": len(diff["only_in_modlist"]),
+        "only_in_manifest": len(diff["only_in_manifest"]),
+        "enabled_mismatch": len(diff["enabled_mismatch"]),
+        "checkpoint": checkpoint,
+        "external_write_detected": bool(checkpoint and changed_files),
+        "changed_files": changed_files,
+        "applied": False,
+    }
+
+    if getattr(args, "apply", False):
+        require_writable(args)
+        result["applied"] = True
+        result.update(commit_profile(
+            env,
+            ProfileEdit(manifest=None),
+            source=f"reconcile:{getattr(args, 'source', 'external')}",
+        ))
+        applied_diff = profile_diff(env)
+        result.update({
+            "modlist_enabled": applied_diff["modlist_enabled"],
+            "manifest_mods": applied_diff["manifest_mods"],
+            "only_in_modlist": len(applied_diff["only_in_modlist"]),
+            "only_in_manifest": len(applied_diff["only_in_manifest"]),
+            "enabled_mismatch": len(applied_diff["enabled_mismatch"]),
+        })
+    elif getattr(args, "fail_on_drift", False) and (
+            result["external_write_detected"] or diff["enabled_mismatch"]):
+        raise Fail("profile drift detected")
+
+    return result
 
 
 def cmd_launch(env: Env, args) -> dict:
@@ -2282,6 +2502,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("name")
     s.add_argument("--force", action="store_true")
     s.set_defaults(func=cmd_disable)
+
+    s = sub_add("reconcile", "report external profile drift or refresh the checkpoint")
+    s.add_argument("--apply", action="store_true",
+                   help="sync existing manifest enabled flags and write profile-state.json")
+    s.add_argument("--source", default="external",
+                   help="source tag used with --apply (default: external)")
+    s.add_argument("--fail-on-drift", action="store_true",
+                   help="fail dry-run when external writes or enabled mismatches are found")
+    s.add_argument("--force", action="store_true",
+                   help="ignore the running-process lock with --apply")
+    s.set_defaults(func=cmd_reconcile)
 
     s = sub_add("launch", "start SKSE through MO2 inside the game's Proton prefix")
     s.add_argument("--shortcut", default="SKSE", help="MO2 customExecutables title (default: SKSE)")

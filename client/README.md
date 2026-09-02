@@ -33,6 +33,7 @@ anything is a harness you stop using.
 ./mo2ctl.py try-fail
 ./mo2ctl.py try-pass -m "Validate Mod Name"
 ./mo2ctl.py enable|disable <name>
+./mo2ctl.py reconcile [--apply] [--source external] [--fail-on-drift]
 ./mo2ctl.py launch [--wait 240] [--background-active]
 ./mo2ctl.py kill [--mo2]
 ```
@@ -73,6 +74,15 @@ checked against the `archives` collection where `_id` is the digest; otherwise t
 entry records `archive_library: unchecked`. The URI defaults to
 `mongodb://127.0.0.1:27017` (matching `mod-library/db/*.py`) and can be overridden
 with `SKYRIM_MONGO_URI`.
+
+Every install, uninstall, enable, disable, and failed try now ends at one profile
+checkpoint boundary. `profiles/manifest.json` remains the provenance ledger, while
+`profiles/profile-state.json` records the live profile hashes, enabled mods, plugin
+order, and manifest drift. `reconcile` is read-only by default and reports external
+changes since that checkpoint. Use `reconcile --apply --source <tag>` to synchronize
+existing manifest entries' enabled flags and write a fresh checkpoint; it never invents
+provenance for unregistered mods or removes stale entries. `--fail-on-drift` makes the
+dry-run return failure when file hashes or enabled flags have drifted.
 
 Profile git helpers deliberately compare profile state semantically, not byte-for-byte.
 The current known churn is: Skyrim may write
