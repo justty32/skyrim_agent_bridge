@@ -14,7 +14,7 @@
     },
     {
       "type": "install",
-      "source": "../../../../out/ModForgeNavmeshNoop.esp",
+      "source": "../../../ModForge/out/ModForgeNavmeshNoop.esp",
       "mod_name": "QaSmoke"
     },
     {
