@@ -1732,6 +1732,8 @@ def parse_fomod(root: Path) -> FomodPlan | None:
 
 
 def default_group_picks(group: FomodGroup) -> list[str] | None:
+    if group.select_type == "SelectAll":
+        return [p.name for p in group.plugins]
     required = [p.name for p in group.plugins if p.type_name.lower() == "required"]
     recommended = [p.name for p in group.plugins if p.type_name.lower() == "recommended"]
     selected = required + recommended

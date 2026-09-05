@@ -265,6 +265,20 @@ class Mo2CtlArchiveTests(unittest.TestCase):
         )
         self.assertIn("version=1.2.3", (dest / "meta.ini").read_text(encoding="utf-8"))
 
+    def test_select_all_fomod_group_picks_every_plugin(self) -> None:
+        plugins = [
+            mo2ctl.FomodPlugin(
+                step="Files", group="Required", name=name, type_name="Optional",
+                description="", files=[],
+            )
+            for name in ("Core", "Textures")
+        ]
+        group = mo2ctl.FomodGroup(
+            step="Files", name="Required", select_type="SelectAll", plugins=plugins,
+        )
+
+        self.assertEqual(mo2ctl.default_group_picks(group), ["Core", "Textures"])
+
     def test_zip_slip_is_rejected(self) -> None:
         archive = self.zipfile("Bad.zip", {"../evil.esp": ""})
 
