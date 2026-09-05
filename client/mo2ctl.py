@@ -649,6 +649,7 @@ def archive_library_status(sha256: str | None) -> str:
     js = f'const n=db.getSiblingDB("skyrim").archives.countDocuments({{_id:"{sha256.lower()}"}}); print(n);'
     # 本機 mod 庫的 mongod 在 27017（與 mod-library/db/*.py 的預設一致）。
     # 這裡原本硬編 27018，連不上時被 fail-safe 吞成 "unchecked"，所以一直沒被發現。
+    # mongosh 冷啟動及建立連線可能超過 0.5 秒，保留 5 秒避免把可用資料庫誤判為 unchecked。
     uri = os.environ.get("SKYRIM_MONGO_URI", "mongodb://127.0.0.1:27017").rstrip("/")
     try:
         proc = subprocess.run(
@@ -656,7 +657,7 @@ def archive_library_status(sha256: str | None) -> str:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=0.5,
+            timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired):
         return "unchecked"
