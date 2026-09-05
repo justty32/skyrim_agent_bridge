@@ -9,6 +9,7 @@
 
 #include <charconv>
 #include <optional>
+#include <unordered_set>
 
 using json = nlohmann::json;
 
@@ -93,12 +94,21 @@ namespace {
         State::Options options;
 
         const std::string include = req.Get("include");
-        options.nearby = include.find("nearby") != std::string::npos;
-        options.cellActors = include.find("cell_actors") != std::string::npos;
-        options.loadedActors = include.find("loaded_actors") != std::string::npos;
-        options.inventory = include.find("inventory") != std::string::npos;
-        options.quests = include.find("quests") != std::string::npos;
-        options.plugins = include.find("plugins") != std::string::npos;
+        std::unordered_set<std::string_view> includes;
+        std::string_view rest = include;
+        while (!rest.empty()) {
+            const auto comma = rest.find(',');
+            includes.insert(rest.substr(0, comma));
+            if (comma == std::string_view::npos) break;
+            rest.remove_prefix(comma + 1);
+        }
+
+        options.nearby = includes.contains("nearby_actors");
+        options.cellActors = includes.contains("cell_actors");
+        options.loadedActors = includes.contains("loaded_actors");
+        options.inventory = includes.contains("inventory");
+        options.quests = includes.contains("quests");
+        options.plugins = includes.contains("plugins");
 
         if (const auto radius = req.Get("radius"); !radius.empty()) {
             try { options.radius = std::stof(radius); } catch (...) {}
