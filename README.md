@@ -10,7 +10,7 @@
 `scene-capture-bridge` 則是由人以 hotkey 與 ImGui 操作、隨內容交付的 **authoring tool**。
 兩者生命週期相反，因此保持為同層 repo；需要共用 scene-walking 邏輯時，將所需部分提取到
 `agent-bridge`，不要把可執行 console command 的 listening socket 併入 authoring tool。
-背景理由見 [`ai-ingame-qa-loop.md`](../../workflows/plans/ai-ingame-qa-loop.md) decision D1：
+背景理由見 [`ai-ingame-qa-loop/context.md`](../../wf/workflows/plans/ai-ingame-qa-loop/context.md) decision D1：
 Wayland、非 XWayland 視窗與 Proton pressure-vessel 使螢幕擷取加模擬輸入不可靠。
 
 ## Status

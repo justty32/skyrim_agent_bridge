@@ -7,7 +7,7 @@ contract, and a two-sided edit should be one commit.
 
 | Tool | Status | What it does |
 |---|---|---|
-| `mo2ctl.py` | ✅ verified end-to-end 2026-08-02 | Drive MO2 without its GUI: install / uninstall / enable / disable / launch / kill / status |
+| `mo2ctl.py` | ✅ verified end-to-end 2026-08-02; `launch` re-pointed at the deployment script 2026-09-03 | Drive MO2 without its GUI: install / uninstall / enable / disable / launch / kill / status |
 | `bridge.py` | ✅ | Talking to the in-game HTTP bridge. Owns the port; everything else imports it |
 | `actor_value_probe.py` | ✅ offline-tested | Strict `getav` reader: exact engine output shape plus repeated identical reads for a chosen runtime reference |
 | `qa_runner.py` | ✅ semantic paths and baseline manifest/fingerprint gate runtime-verified | Execute a `qa.json`, including fail-closed baseline loading and retryable actor/dialogue/MessageBox steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
@@ -28,13 +28,13 @@ anything is a harness you stop using.
 ./mo2ctl.py profile-semantics [--ref HEAD]
 ./mo2ctl.py profile-absorb-churn
 ./mo2ctl.py static-gates --plugin NewMod.esp --baseline before.json --report after.json
-./mo2ctl.py select-profile Modpack-KR
+./mo2ctl.py select-profile modpack-main
 ./mo2ctl.py try-begin "Mod Name"
 ./mo2ctl.py try-fail
 ./mo2ctl.py try-pass -m "Validate Mod Name"
 ./mo2ctl.py enable|disable <name>
 ./mo2ctl.py reconcile [--apply] [--source external] [--fail-on-drift]
-./mo2ctl.py launch [--wait 240] [--background-active]
+./mo2ctl.py launch [--shortcut SKSE] [--wait 180] [--no-wait] [--background-active]
 ./mo2ctl.py kill [--mo2]
 ```
 
@@ -188,11 +188,19 @@ command line. Scanning `/proc` and skipping our own pid cannot do that.
 ## launch
 
 ```
-protontricks-launch --appid 489830 <MO2>/ModOrganizer.exe moshortcut://:SKSE
+<deployment>/instance/tools/launch-mo2.sh --shortcut SKSE
 ```
 
-MO2 has to run inside the game's own Proton prefix — usvfs needs MO2 and the game in one
-wine session, which is also why there is no separate MO2 wine prefix to point at.
+`launch` does not build the Proton command line itself. It shells out to the deployment's
+own launcher script, resolved as `<repo>/../../instance/tools/launch-mo2.sh` and
+overridable with `MO2CTL_LAUNCH_SCRIPT`; a missing script is a `Fail`, not a silent
+fallback. The previous `protontricks-launch --appid 489830` path was removed on
+2026-09-03 because it no longer worked, and the deployment script is where the
+prefix-version guard, the non-ASCII `modlist.txt` guard and the `STEAM_COMPAT_*`
+environment live.
+
+MO2 still has to run inside the game's own Proton prefix — usvfs needs MO2 and the game
+in one wine session, which is also why there is no separate MO2 wine prefix to point at.
 `moshortcut://:SKSE` is MO2's own name for the `customExecutables` entry in
 `ModOrganizer.ini`, so this is the same path the GUI's Run button takes. Use `--shortcut`
 if that entry is renamed.
