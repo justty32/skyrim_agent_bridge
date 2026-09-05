@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <future>
@@ -38,8 +39,10 @@ namespace GameThread {
         // thread runs it, which may be after Run() has already given up.
         auto promise = std::make_shared<std::promise<R>>();
         auto future = promise->get_future();
+        auto cancelled = std::make_shared<std::atomic<bool>>(false);
 
-        task->AddTask([promise, fn = std::forward<F>(fn)]() mutable {
+        task->AddTask([promise, cancelled, fn = std::forward<F>(fn)]() mutable {
+            if (cancelled->load()) return;
             try {
                 promise->set_value(fn());
             } catch (...) {
@@ -50,6 +53,7 @@ namespace GameThread {
         });
 
         if (future.wait_for(timeout) != std::future_status::ready) {
+            cancelled->store(true);
             return std::nullopt;
         }
         return future.get();
