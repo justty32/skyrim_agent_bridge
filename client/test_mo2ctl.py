@@ -183,6 +183,21 @@ class Mo2CtlArchiveTests(unittest.TestCase):
                 self.args(archive, name="MissingAnchor", plugin_after="missing.esp"),
             )
 
+    def test_install_removes_new_mod_directory_when_placement_fails(self) -> None:
+        archive = self.zipfile("PlacementFail.zip", {"Data/PlacementFail.esp": ""})
+        dest = self.root / "mods" / "PlacementFail"
+        real_copytree = mo2ctl.shutil.copytree
+
+        with (
+            patch.object(mo2ctl.shutil, "copytree", wraps=real_copytree) as copytree,
+            patch.object(mo2ctl, "place_mod", side_effect=mo2ctl.Fail("placement failed")),
+            self.assertRaisesRegex(mo2ctl.Fail, "placement failed"),
+        ):
+            mo2ctl.cmd_install(self.env, self.args(archive, name="PlacementFail"))
+
+        copytree.assert_called_once()
+        self.assertFalse(dest.exists())
+
     def test_fomod_materializes_replayable_default_choices(self) -> None:
         archive = self.zipfile("Fomod.zip", {
             "fomod/info.xml": "<fomod><Name>Fomod Name</Name><Version>1.2.3</Version></fomod>",

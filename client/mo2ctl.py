@@ -1934,12 +1934,14 @@ def cmd_install(env: Env, args) -> dict:
     )
     src_dir, loose, name = resolved.source_dir, resolved.loose_files, resolved.name
     dest = env.mods / name
+    owns_dest = False
 
     try:
         if dest.exists():
             if not args.force:
                 raise Fail(f"mod folder already exists: {dest} (use --force to replace)")
             shutil.rmtree(dest)
+        owns_dest = True
 
         warnings = list(resolved.warnings or [])
         if src_dir is not None and not looks_like_mod_root(src_dir):
@@ -1977,6 +1979,10 @@ def cmd_install(env: Env, args) -> dict:
         )
         archives = bsa_files(dest)
         archives_added = add_archives(env, archives, plugins) if not args.no_enable else []
+    except Exception:
+        if owns_dest:
+            shutil.rmtree(dest, ignore_errors=True)
+        raise
     finally:
         if resolved.cleanup:
             shutil.rmtree(resolved.cleanup, ignore_errors=True)
