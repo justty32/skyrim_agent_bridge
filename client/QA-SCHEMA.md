@@ -36,8 +36,8 @@ Any step accepts `label` (what shows in the report), `comment` (ignored, for hum
 | type | fields | notes |
 |---|---|---|
 | `install` | `source`, `mod_name`, `enable`, `version`, `comment` | `source` is a mod folder, a folder containing `Data/`, or a bare `.esp`; **relative to the qa.json**, not the shell's cwd |
-| `uninstall` | `mod_name`, `keep_files` | |
-| `enable` / `disable` | `mod_name` | |
+| `uninstall` | `mod_name`, `keep_files`, `force` | |
+| `enable` / `disable` | `mod_name`, `force` | |
 | `launch` | `wait`, `shortcut`, `background_active` | starts SKSE through MO2; waits for the bridge **and** the game thread; `background_active` defaults true and is restored by `kill` |
 | `kill` | `mo2`, `timeout` | `mo2: true` also closes MO2, which is what makes the profile writable |
 | `load_baseline` | `save`, `retry_for`, `retry_interval`, `timeout`, `state_timeout` | preflights top-level `baseline.manifest`, loads its stem, then polls its state fingerprint; optional `save` must equal the manifest stem |
@@ -49,7 +49,7 @@ Any step accepts `label` (what shows in the report), `comment` (ignored, for hum
 | `select_message_box` | `text` or `index`, `message`, `retry_for`, `retry_interval`, `settle`, `timeout` | select one modal button; `message` is an optional exact guard |
 | `assert_global` | `editor_id`, `expect`, `retry_for`, `retry_interval`, `timeout` | compare a TESGlobal's structured runtime value |
 | `wait` | `seconds` | |
-| `assert_state` | `expect`, `include`, `radius`, `limit`, `retry_for`, `retry_interval` | see below |
+| `assert_state` | `expect`, `include`, `radius`, `limit`, `retry_for`, `retry_interval`, `timeout` | see below |
 | `handoff_user` | `message`, `expect` | stop and ask a human |
 
 `install` defaults to `force: true` — a QA run should not fail because the previous run
