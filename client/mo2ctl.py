@@ -1315,9 +1315,20 @@ def add_plugins(
     plugins_at = plugin_insert_index(plugins, after=after, before=before)
     order_at = plugin_insert_index(order, after=after, before=before)
 
+    requested = {name.lower() for name in names}
+    enabled = {
+        ln.lstrip("*").strip().lower()
+        for ln in plugins.lines
+        if ln.startswith("*") and ln.lstrip("*").strip()
+    }
     have = {ln.lstrip("*").strip().lower() for ln in plugins.lines if ln and not ln.startswith("#")}
     added = [name for name in names if name.lower() not in have]
-    if added:
+    activated = [name for name in names if name.lower() not in enabled]
+    for index, line in enumerate(plugins.lines):
+        if (line and not line.startswith(("#", "*"))
+                and line.lstrip("*").strip().lower() in requested):
+            plugins.lines[index] = "*" + line
+    if activated:
         plugins.lines[plugins_at:plugins_at] = ["*" + name for name in added]
         write_file(plugins)
 
@@ -1327,7 +1338,7 @@ def add_plugins(
         order.lines[order_at:order_at] = order_added
         write_file(order)
 
-    return added
+    return activated
 
 
 def priority_plugin_anchor(env: Env, priority: str) -> tuple[str | None, str | None]:
