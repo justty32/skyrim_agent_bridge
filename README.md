@@ -32,7 +32,7 @@ radius `0.294322 m`、axis `1.118425 m`、total `1.707070 m`；完整 active-lis
 | `POST /console` | game thread | `{"cmd": "...", "ref": "0x14"}`；`ref` 是選用的 console selected reference。Output 僅一行且為 best-effort。 |
 | `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","scope":"loaded","distance":128}` 或 `{"form_id":"0x02001234"}`；`scope=loaded` 可搜尋 actor process lists 並跨 cell 移動。 |
 | `POST /actor/activate` | game thread | 使用相同 actor selector；actor 載入玩家目前 cell 後啟動一般對話。 |
-| `POST /dialogue/select` | game thread | 以 `text`、zero-based `index`、runtime `info_form_id` 三者之一選擇可見選項。 |
+| `POST /dialogue/select` | game thread | 以 `text`、zero-based `index`、runtime `info_form_id` 三者之一選擇可見選項；`contains` 只影響 `text` selector，預設 `false` 為 exact match。 |
 | `POST /dialogue/close` | game thread | 結束目前玩家對話。 |
 | `POST /messagebox/select` | game thread | `{"text":"OK","message":"Done Writing"}` 或 `{"index":0}`；選用 exact `message` guard 可防止 modal 內容改變後誤按。 |
 
