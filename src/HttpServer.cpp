@@ -103,9 +103,9 @@ namespace {
         {
             std::string lower = head;
             for (auto& c : lower) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
-            const auto pos = lower.find("content-length:");
+            const auto pos = lower.find("\r\ncontent-length:");
             if (pos != std::string::npos) {
-                contentLength = static_cast<std::size_t>(std::strtoul(head.c_str() + pos + 15, nullptr, 10));
+                contentLength = static_cast<std::size_t>(std::strtoul(head.c_str() + pos + 2 + 15, nullptr, 10));
                 if (contentLength > kMaxRequestBytes) return false;
             }
         }
