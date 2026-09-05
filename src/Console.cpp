@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <format>
+#include <memory>
 
 namespace {
     // Only ever touched on the game thread (Execute's contract), so a plain
@@ -27,7 +28,7 @@ Console::Result Console::Execute(std::string_view a_command, RE::TESObjectREFR* 
         SKSE::log::error("Console: no Script form factory");
         return result;
     }
-    auto* script = factory->Create();
+    auto script = std::unique_ptr<RE::Script>{ factory->Create() };
     if (!script) {
         SKSE::log::error("Console: Script::Create returned null");
         return result;
@@ -61,10 +62,6 @@ Console::Result Console::Execute(std::string_view a_command, RE::TESObjectREFR* 
             result.output.push_back(std::move(after));
         }
     }
-
-    // The Script form is ours, not the game's — it was never registered in a
-    // form list, so nothing else will ever free it.
-    delete script;
 
     return result;
 }
