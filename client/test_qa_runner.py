@@ -544,6 +544,28 @@ class SemanticStepTests(unittest.TestCase):
         })
         self.assertEqual(result["value"], 5.0)
 
+    @patch("qa_runner.bridge.state", return_value={"ok": True, "player": {"health": None}})
+    def test_assert_state_config_error_is_failed_step_and_teardown_runs(self, _state):
+        runner = qa_runner.Runner(
+            {
+                "steps": [{
+                    "type": "assert_state",
+                    "expect": {"player.health": {"gt": 0}},
+                    "retry_for": 0,
+                }],
+                "teardown": [{"type": "wait", "seconds": 0}],
+            },
+            Path.cwd(),
+            interactive=False,
+        )
+
+        report = runner.run()
+
+        self.assertEqual(report["steps"][0]["status"], qa_runner.FAIL)
+        self.assertIn("not comparable as a number", report["steps"][0]["error"])
+        self.assertEqual(report["steps"][1]["status"], qa_runner.PASS)
+        self.assertEqual(report["steps"][1]["phase"], "teardown")
+
     def test_semantic_steps_validate(self):
         spec = {
             "steps": [

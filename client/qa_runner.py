@@ -906,6 +906,9 @@ class Runner:
         except StepFailed as exc:
             return {**record, "status": FAIL, "duration_s": round(time.time() - started, 1),
                     "error": str(exc), "failures": exc.failures}
+        except Exception as exc:
+            return {**record, "status": FAIL, "duration_s": round(time.time() - started, 1),
+                    "error": str(exc)}
 
     @staticmethod
     def _skipped(index: int, step: dict) -> dict:
