@@ -1,7 +1,10 @@
 {
   "name": "bend-time-rings",
   "description": "P4 third-party mod validation for Bend Time Rings: prove the plugin loads, move to a stable interior, add and equip the Slow Time ring, then hand off visual inspection.",
-  "baseline": "Save3_474D5830_0_507269736F6E6572_Tamriel_000008_20260802003106_1_1",
+  "baseline": {
+    "_comment": "Replace with your deployment-owned baseline-manifest.json. It must be an absolute path under $QA_BASELINE_MANIFEST_ROOT; see QA-SCHEMA.md \"Baseline manifest and load proof\". Fail-closed by design, so this placeholder cannot be shipped pre-filled.",
+    "manifest": "/absolute/deployment/path/baseline-manifest.json"
+  },
   "defaults": {
     "settle_seconds": 8,
     "assert_retry_seconds": 30

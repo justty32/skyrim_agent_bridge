@@ -2,8 +2,10 @@
 
 A test run as one file. `qa_runner.py <file.qa.json>` executes it and reports per-step
 pass/fail. The step sequence in [`examples/smoke.qa.json`](examples/smoke.qa.json) is a
-worked example; its legacy string baseline must be migrated as described below before
-the next live run.
+worked example. Its `baseline.manifest` is a placeholder: point it at your own
+deployment-owned manifest under `$QA_BASELINE_MANIFEST_ROOT` before a live run. That
+substitution is the only edit the shipped examples need — `validate()` returns clean
+once the path resolves.
 
 ```jsonc
 {
