@@ -1048,6 +1048,11 @@ def validate(spec: dict, base_dir: Path) -> list[str]:
                 except ConfigError as exc:
                     problems.append(f"{where}: baseline preflight failed: {exc}")
             if kind == "assert_state":
+                include = step.get("include")
+                if ("include" in step
+                        and (not isinstance(include, list)
+                             or any(not isinstance(item, str) for item in include))):
+                    problems.append(f"{where}: include must be a list of strings")
                 expect = step.get("expect")
                 if not isinstance(expect, dict) or not expect:
                     problems.append(f"{where}: assert_state needs a non-empty `expect` object")

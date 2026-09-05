@@ -579,6 +579,19 @@ class SemanticStepTests(unittest.TestCase):
         }
         self.assertEqual(qa_runner.validate(spec, Path(tempfile.gettempdir())), [])
 
+    def test_assert_state_include_must_be_list_of_strings(self):
+        spec = {
+            "steps": [{
+                "type": "assert_state",
+                "include": "plugins",
+                "expect": {"plugins[*].name": {"contains": "Foo.esp"}},
+            }],
+        }
+
+        problems = qa_runner.validate(spec, Path(tempfile.gettempdir()))
+
+        self.assertTrue(any("include must be a list of strings" in p for p in problems))
+
     def test_semantic_steps_reject_missing_selectors(self):
         spec = {
             "steps": [
