@@ -7,6 +7,9 @@
 #include "MessageBox.h"
 #include "State.h"
 
+#include <charconv>
+#include <optional>
+
 using json = nlohmann::json;
 
 #ifndef AGENT_BRIDGE_VERSION
@@ -14,29 +17,46 @@ using json = nlohmann::json;
 #endif
 
 namespace {
-    // "0x14" / "14" / "0X14" -> 0x14. Returns 0 on anything unparseable, which
-    // the caller treats as "no target" rather than an error — a bad ref should
-    // not silently retarget the command at something else.
-    RE::FormID ParseFormID(const std::string& s)
+    // "0x14" / "14" / "0X14" -> 0x14. The whole string must be valid.
+    std::optional<RE::FormID> ParseFormID(std::string_view s)
     {
-        if (s.empty()) return 0;
-        try {
-            return static_cast<RE::FormID>(std::stoul(s, nullptr, 16));
-        } catch (...) {
-            return 0;
+        if (s.starts_with("0x") || s.starts_with("0X")) {
+            s.remove_prefix(2);
         }
+        if (s.empty()) return std::nullopt;
+
+        RE::FormID value = 0;
+        const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), value, 16);
+        if (ec != std::errc{} || ptr != s.data() + s.size()) return std::nullopt;
+        return value;
     }
 
-    RE::FormID BodyFormID(const json& a_body, std::string_view a_key)
+    RE::FormID BodyFormID(const json& a_body, std::string_view a_key, bool a_rejectInvalid = false)
     {
         const auto it = a_body.find(a_key);
         if (it == a_body.end() || it->is_null()) return 0;
+        if (a_rejectInvalid) {
+            std::optional<RE::FormID> value;
+            if (it->is_number_unsigned()) {
+                const auto raw = it->get<std::uint64_t>();
+                if (raw <= UINT32_MAX) value = static_cast<RE::FormID>(raw);
+            } else if (it->is_number_integer()) {
+                const auto raw = it->get<std::int64_t>();
+                if (raw > 0 && raw <= UINT32_MAX) value = static_cast<RE::FormID>(raw);
+            } else if (it->is_string()) {
+                value = ParseFormID(it->get<std::string>());
+            }
+            if (!value || *value == 0) {
+                throw std::invalid_argument(std::format("{} must be a non-zero hexadecimal form id", a_key));
+            }
+            return *value;
+        }
         if (it->is_number_unsigned()) return it->get<RE::FormID>();
         if (it->is_number_integer()) {
             const auto value = it->get<std::int64_t>();
             return value > 0 && value <= UINT32_MAX ? static_cast<RE::FormID>(value) : 0;
         }
-        return it->is_string() ? ParseFormID(it->get<std::string>()) : 0;
+        return it->is_string() ? ParseFormID(it->get<std::string>()).value_or(0) : 0;
     }
 
     GameActions::ActorSelector ActorSelectorFrom(const json& a_body)
@@ -47,7 +67,7 @@ namespace {
         }
         return {
             .name = a_body.value("name", std::string{}),
-            .formID = BodyFormID(a_body, "form_id"),
+            .formID = BodyFormID(a_body, "form_id", true),
             .loadedScope = scope == "loaded",
         };
     }
@@ -119,7 +139,11 @@ namespace {
             return Http::Response::Error(400, "missing \"cmd\"");
         }
 
-        const RE::FormID refID = ParseFormID(refStr);
+        const auto parsedRefID = refStr.empty() ? std::optional<RE::FormID>{ 0 } : ParseFormID(refStr);
+        if (!parsedRefID || (!refStr.empty() && *parsedRefID == 0)) {
+            return Http::Response::Error(400, "ref must be a non-zero hexadecimal form id");
+        }
+        const RE::FormID refID = *parsedRefID;
 
         auto ran = GameThread::Run(
             [cmd, refID]() -> json {
