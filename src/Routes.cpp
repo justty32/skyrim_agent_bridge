@@ -8,6 +8,7 @@
 #include "State.h"
 
 #include <charconv>
+#include <cmath>
 #include <optional>
 #include <unordered_set>
 
@@ -111,7 +112,15 @@ namespace {
         options.plugins = includes.contains("plugins");
 
         if (const auto radius = req.Get("radius"); !radius.empty()) {
-            try { options.radius = std::stof(radius); } catch (...) {}
+            try {
+                const float parsedRadius = std::stof(radius);
+                if (!std::isfinite(parsedRadius) || parsedRadius <= 0.0f) {
+                    return Http::Response::Error(400, "radius must be a finite positive number");
+                }
+                options.radius = parsedRadius;
+            } catch (...) {
+                return Http::Response::Error(400, "radius must be a finite positive number");
+            }
         }
         if (const auto limit = req.Get("limit"); !limit.empty()) {
             try { options.limit = static_cast<std::size_t>(std::stoul(limit)); } catch (...) {}
