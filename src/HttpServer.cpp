@@ -144,7 +144,7 @@ namespace {
         SendAll(client, body.data(), body.size());
     }
 
-    void Serve(SOCKET client)
+    void ServeInner(SOCKET client)
     {
         Http::Request req;
         if (!ReadRequest(client, req)) {
@@ -168,6 +168,24 @@ namespace {
         } catch (...) {
             SKSE::log::error("AgentBridge: handler for {} {} threw (unknown)", req.method, req.path);
             SendResponse(client, Http::Response::Error(500, "unknown exception"));
+        }
+    }
+
+    // Nothing may leave this frame. Serve() runs on a bare std::thread, so an
+    // escaping exception is std::terminate — the whole game process, not just
+    // the bridge. The handler try/catch inside ServeInner is not enough: the
+    // 400 and 404 replies happen before it, and SendResponse itself can throw
+    // (json::dump on a request path that is not valid UTF-8 raises type_error
+    // 316, and `curl 127.0.0.1:5099/caf%E9` is enough to reach it). The catch
+    // in ServeInner can throw for the same reason while reporting a failure.
+    void Serve(SOCKET client)
+    {
+        try {
+            ServeInner(client);
+        } catch (const std::exception& e) {
+            SKSE::log::error("AgentBridge: request failed outside the handler: {}", e.what());
+        } catch (...) {
+            SKSE::log::error("AgentBridge: request failed outside the handler (unknown)");
         }
     }
 
