@@ -132,7 +132,7 @@ namespace {
 
     void SendResponse(SOCKET client, const Http::Response& resp)
     {
-        const std::string body = resp.body.dump();
+        const std::string body = resp.body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         const std::string head = std::format(
             "HTTP/1.1 {} {}\r\n"
             "Content-Type: application/json\r\n"
