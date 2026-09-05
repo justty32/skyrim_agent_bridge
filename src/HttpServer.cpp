@@ -207,6 +207,12 @@ namespace {
             const SOCKET client = ::accept(listener, nullptr, nullptr);
             if (client == INVALID_SOCKET) continue;
 
+            const DWORD timeoutMs = 5000;
+            ::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
+                reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+            ::setsockopt(client, SOL_SOCKET, SO_SNDTIMEO,
+                reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+
             Serve(client);
             ::shutdown(client, SD_SEND);
             ::closesocket(client);
