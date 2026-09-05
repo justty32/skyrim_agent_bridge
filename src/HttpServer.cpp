@@ -245,6 +245,8 @@ bool Http::Start(std::uint16_t port)
     const SOCKET listener = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listener == INVALID_SOCKET) {
         SKSE::log::error("AgentBridge: socket() failed ({})", ::WSAGetLastError());
+        ::WSACleanup();
+        g_wsaStarted = false;
         return false;
     }
 
@@ -262,11 +264,15 @@ bool Http::Start(std::uint16_t port)
         SKSE::log::error("AgentBridge: bind(127.0.0.1:{}) failed ({}) — port in use?",
             port, ::WSAGetLastError());
         ::closesocket(listener);
+        ::WSACleanup();
+        g_wsaStarted = false;
         return false;
     }
     if (::listen(listener, 8) == SOCKET_ERROR) {
         SKSE::log::error("AgentBridge: listen failed ({})", ::WSAGetLastError());
         ::closesocket(listener);
+        ::WSACleanup();
+        g_wsaStarted = false;
         return false;
     }
 
