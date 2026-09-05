@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -11,7 +13,7 @@ import unittest
 import zipfile
 from datetime import timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mo2ctl
@@ -645,6 +647,27 @@ class Mo2CtlStaticGateTests(unittest.TestCase):
             "tools": list(tools),
             "crash_logs": {"checked": False},
         }
+
+    def test_housecarl_request_times_out_when_stdout_never_replies(self) -> None:
+        read_fd, write_fd = os.pipe()
+        try:
+            stdout = Mock()
+            stdout.fileno.return_value = read_fd
+            stdout.readline.side_effect = AssertionError("blocking readline was called")
+            client = mo2ctl.HousecarlClient(
+                mo2ctl.Env(Path(tempfile.gettempdir()), "QA"), request_timeout=0.01,
+            )
+            client.proc = argparse.Namespace(
+                stdin=io.StringIO(), stdout=stdout, stderr=None,
+            )
+
+            with self.assertRaisesRegex(mo2ctl.Fail, r"timed out after 0\.01s"):
+                client.request("tools/call", {})
+
+            stdout.readline.assert_not_called()
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
 
     def test_load_order_gate_ignores_known_cc_churn_warnings(self) -> None:
         capture = self.capture(self.result(

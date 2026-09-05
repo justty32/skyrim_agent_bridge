@@ -37,6 +37,7 @@ import hashlib
 import json
 import os
 import re
+import selectors
 import shutil
 import signal
 import subprocess
@@ -65,6 +66,7 @@ STATIC_GATE_FORMAT = "mo2ctl-static-gates-v1"
 PROFILE_MAIN_BRANCH = "main"
 DEFAULT_HOUSECARL_SERVER = Path.home() / "tools/housecarl/server/housecarl-mcp"
 HOUSECARL_MCP_PROTOCOL = "2025-06-18"
+HOUSECARL_REQUEST_TIMEOUT_ENV = "MO2CTL_HOUSECARL_TIMEOUT"
 ENGINE_LOADORDER_CHURN = {
     "ccbgssse068-bloodfall.esl",
     "ccbgssse069-contest.esl",
@@ -677,10 +679,20 @@ class HousecarlClient:
     here: initialize and tools/call.
     """
 
-    def __init__(self, env: Env, server: Path | None = None):
+    def __init__(self, env: Env, server: Path | None = None,
+                 request_timeout: float | None = None):
         self.env = env
         self.server = (server or DEFAULT_HOUSECARL_SERVER).expanduser()
+        timeout_value = (request_timeout if request_timeout is not None else
+                         os.environ.get(HOUSECARL_REQUEST_TIMEOUT_ENV, "120"))
+        try:
+            self.request_timeout = float(timeout_value)
+        except (TypeError, ValueError) as exc:
+            raise Fail(f"{HOUSECARL_REQUEST_TIMEOUT_ENV} must be a number") from exc
+        if self.request_timeout <= 0:
+            raise Fail(f"{HOUSECARL_REQUEST_TIMEOUT_ENV} must be positive")
         self.proc: subprocess.Popen | None = None
+        self._stdout_buffer = b""
         self.next_id = 1
 
     def __enter__(self):
@@ -721,21 +733,39 @@ class HousecarlClient:
     def request(self, method: str, params: dict) -> dict:
         msg_id = self.next_id
         self.next_id += 1
+        deadline = time.monotonic() + self.request_timeout
         self._send({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params})
         assert self.proc is not None and self.proc.stdout is not None
-        while True:
-            line = self.proc.stdout.readline()
-            if not line:
-                stderr = ""
-                if self.proc.stderr:
-                    stderr = self.proc.stderr.read()
-                raise Fail(f"houseCARL server exited before replying: {stderr.strip()}")
-            message = json.loads(line)
-            if message.get("id") != msg_id:
-                continue
-            if "error" in message:
-                raise Fail(f"houseCARL MCP error: {message['error']}")
-            return message.get("result") or {}
+        with selectors.DefaultSelector() as selector:
+            selector.register(self.proc.stdout, selectors.EVENT_READ)
+            while True:
+                newline = self._stdout_buffer.find(b"\n")
+                if newline >= 0:
+                    line = self._stdout_buffer[:newline]
+                    self._stdout_buffer = self._stdout_buffer[newline + 1:]
+                    if not line.strip():
+                        continue
+                    message = json.loads(line)
+                    if message.get("id") != msg_id:
+                        continue
+                    if "error" in message:
+                        raise Fail(f"houseCARL MCP error: {message['error']}")
+                    return message.get("result") or {}
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise Fail(
+                        f"houseCARL request timed out after {self.request_timeout:g}s: {method}"
+                    )
+                chunk = os.read(self.proc.stdout.fileno(), 65536)
+                if not chunk:
+                    if self._stdout_buffer:
+                        self._stdout_buffer += b"\n"
+                        continue
+                    stderr = ""
+                    if self.proc.stderr:
+                        stderr = self.proc.stderr.read()
+                    raise Fail(f"houseCARL server exited before replying: {stderr.strip()}")
+                self._stdout_buffer += chunk
 
     def _send(self, message: dict) -> None:
         assert self.proc is not None and self.proc.stdin is not None
