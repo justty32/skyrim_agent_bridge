@@ -44,7 +44,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -198,13 +198,6 @@ def read_file(path: Path) -> TextFile:
     return TextFile(path=path, lines=lines, eol=eol, trailing_eol=trailing)
 
 
-def write_file(tf: TextFile, *, backup: bool = True) -> Path | None:
-    made = backup_file(tf.path) if backup else None
-    text = tf.eol.join(tf.lines) + (tf.eol if tf.trailing_eol else "")
-    tf.path.write_bytes(text.encode("utf-8"))
-    return made
-
-
 def atomic_write(path: Path, data: bytes) -> None:
     """Replace one file atomically, keeping temporary bytes on the same filesystem."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -312,10 +305,16 @@ def write_manifest(env: Env, data: dict, *, source: str) -> None:
 
 @dataclass
 class ProfileEdit:
-    """The in-memory provenance result of one profile mutation."""
+    """Stage profile text and provenance until commit_profile publishes them."""
 
     manifest: dict | None = None
     manifest_skipped: str | None = None
+    files: dict[Path, TextFile] = field(default_factory=dict)
+
+    def read(self, path: Path) -> TextFile:
+        if path not in self.files:
+            self.files[path] = read_file(path)
+        return self.files[path]
 
 
 def profile_diff(env: Env) -> dict:
@@ -367,6 +366,7 @@ def build_profile_state(env: Env, *, source: str,
             "plugins": _profile_file_state(env.plugins),
             "loadorder": _profile_file_state(env.loadorder),
         },
+        "mod_order": modlist_entries(modlist),
         "enabled_count": len(enabled),
         "enabled": enabled,
         "plugin_order": [
@@ -391,11 +391,21 @@ def write_profile_state(env: Env, state: dict) -> None:
 
 
 def commit_profile(env: Env, edit: ProfileEdit, *, source: str) -> dict:
-    """Synchronize provenance and write the profile's live checkpoint."""
-    original = read_manifest(env)
-    manifest = edit.manifest or original
+    """Publish staged text, provenance, then the hash-bound live checkpoint.
+
+    Caller must exclude MO2/other writers. Individual replacements are atomic;
+    ordinary I/O failures roll back, while crash/interruption is detected by
+    reconcile's checkpoint hashes (there is no multi-file atomic rename).
+    """
+    original = read_manifest(env)  # validate before touching profile bytes
+    manifest = edit.manifest if edit.manifest is not None else original
     manifest_changed = manifest != original
-    entries = dict(modlist_entries(read_file(env.modlist)))
+    allowed = {env.modlist, env.plugins, env.loadorder, env.archives}
+    if set(edit.files) - allowed:
+        raise Fail("profile edit contains a file outside the selected profile")
+    for path in (env.modlist, env.plugins, env.loadorder):
+        edit.read(path)  # require the complete triplet before any writes
+    entries = dict(modlist_entries(edit.read(env.modlist)))
     synced = []
     for name, entry in manifest["mods"].items():
         if name in entries and entry.get("enabled") != entries[name]:
@@ -403,15 +413,32 @@ def commit_profile(env: Env, edit: ProfileEdit, *, source: str) -> dict:
             synced.append(name)
 
     manifest_written = manifest_changed or bool(synced)
-    if manifest_written:
-        write_manifest(env, manifest, source=source)
-
-    state = build_profile_state(
-        env,
-        source=source,
-        manifest_dirty=edit.manifest_skipped,
-    )
-    write_profile_state(env, state)
+    paths = [*edit.files, env.manifest, env.profile_state]
+    before = {path: path.read_bytes() if path.exists() else None for path in paths}
+    stats = {path: path.stat() for path in paths if path.exists()}
+    changed = []
+    try:
+        for path, tf in edit.files.items():
+            data = (tf.eol.join(tf.lines) + (tf.eol if tf.trailing_eol else "")).encode("utf-8")
+            if data != before[path]:
+                backup_file(path)
+                changed.append(path)
+                atomic_write(path, data)
+        if manifest_written:
+            changed.append(env.manifest)
+            write_manifest(env, manifest, source=source)
+        state = build_profile_state(env, source=source, manifest_dirty=edit.manifest_skipped)
+        changed.append(env.profile_state)
+        write_profile_state(env, state)  # publish last; binds both ledgers to bytes
+    except Exception:
+        for path in reversed(changed):
+            if before[path] is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_write(path, before[path])
+                stat = stats[path]
+                os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        raise
     state_summary = {
         "format": state["format"],
         "profile": state["profile"],
@@ -1251,8 +1278,8 @@ def modlist_entries(tf: TextFile) -> list[tuple[str, bool]]:
     return out
 
 
-def set_mod_state(env: Env, name: str, enabled: bool) -> str:
-    tf = read_file(env.modlist)
+def set_mod_state(env: Env, name: str, enabled: bool, edit: ProfileEdit) -> str:
+    tf = edit.read(env.modlist)
     idx = modlist_index(tf, name)
     if idx is None:
         raise Fail(f"mod not in {env.profile} modlist: {name}")
@@ -1260,7 +1287,6 @@ def set_mod_state(env: Env, name: str, enabled: bool) -> str:
     if tf.lines[idx].startswith(prefix):
         return "unchanged"
     tf.lines[idx] = prefix + tf.lines[idx][1:]
-    write_file(tf)
     return "changed"
 
 
@@ -1335,14 +1361,17 @@ def add_plugins(
     *,
     after: str | None = None,
     before: str | None = None,
+    edit: ProfileEdit | None = None,
 ) -> list[str]:
     if after and before:
         raise Fail("plugin placement cannot specify both after and before")
     if not names:
         return []
 
-    plugins = read_file(env.plugins)
-    order = read_file(env.loadorder)
+    own_edit = edit is None
+    edit = edit if edit is not None else ProfileEdit()
+    plugins = edit.read(env.plugins)
+    order = edit.read(env.loadorder)
     plugins_at = plugin_insert_index(plugins, after=after, before=before)
     order_at = plugin_insert_index(order, after=after, before=before)
 
@@ -1361,14 +1390,14 @@ def add_plugins(
             plugins.lines[index] = "*" + line
     if activated:
         plugins.lines[plugins_at:plugins_at] = ["*" + name for name in added]
-        write_file(plugins)
 
     have = {ln.strip().lower() for ln in order.lines if ln and not ln.startswith("#")}
     order_added = [name for name in names if name.lower() not in have]
     if order_added:
         order.lines[order_at:order_at] = order_added
-        write_file(order)
 
+    if own_edit:
+        commit_profile(env, edit, source="mo2ctl:add-plugins")
     return activated
 
 
@@ -1395,18 +1424,17 @@ def priority_plugin_anchor(env: Env, priority: str) -> tuple[str | None, str | N
     return None, matches[0]
 
 
-def remove_plugins(env: Env, names: list[str]) -> list[str]:
+def remove_plugins(env: Env, names: list[str], edit: ProfileEdit) -> list[str]:
     if not names:
         return []
     drop = {n.lower() for n in names}
     removed = []
     for path in (env.plugins, env.loadorder):
-        tf = read_file(path)
+        tf = edit.read(path)
         keep = [ln for ln in tf.lines if ln.lstrip("*").strip().lower() not in drop]
         if len(keep) != len(tf.lines):
             removed.extend(n for n in names if n not in removed)
             tf.lines = keep
-            write_file(tf)
     return removed
 
 
@@ -1421,34 +1449,31 @@ def plugin_stems(names: list[str]) -> set[str]:
     return {Path(name).stem.lower() for name in names}
 
 
-def add_archives(env: Env, bsa_names: list[str], plugin_names: list[str]) -> list[str]:
+def add_archives(env: Env, bsa_names: list[str], plugin_names: list[str], edit: ProfileEdit) -> list[str]:
     unmanaged = [name for name in bsa_names if Path(name).stem.lower() not in plugin_stems(plugin_names)]
     if not unmanaged:
         return []
     if not env.archives.is_file():
         raise Fail(f"missing profile file: {env.archives}")
-    archives = read_file(env.archives)
+    archives = edit.read(env.archives)
     have = {ln.strip().lower() for ln in archives.lines if ln and not ln.startswith("#")}
     added = []
     for name in unmanaged:
         if name.lower() not in have:
             archives.lines.append(name)
             added.append(name)
-    if added:
-        write_file(archives)
     return added
 
 
-def remove_archives(env: Env, bsa_names: list[str], plugin_names: list[str]) -> list[str]:
+def remove_archives(env: Env, bsa_names: list[str], plugin_names: list[str], edit: ProfileEdit) -> list[str]:
     unmanaged = {name.lower() for name in bsa_names
                  if Path(name).stem.lower() not in plugin_stems(plugin_names)}
     if not unmanaged or not env.archives.is_file():
         return []
-    archives = read_file(env.archives)
+    archives = edit.read(env.archives)
     removed = [ln.strip() for ln in archives.lines if ln.strip().lower() in unmanaged]
     if removed:
         archives.lines = [ln for ln in archives.lines if ln.strip().lower() not in unmanaged]
-        write_file(archives)
     return removed
 
 
@@ -1970,6 +1995,7 @@ def looks_like_mod_root(path: Path) -> bool:
 
 def cmd_install(env: Env, args) -> dict:
     require_writable(args)
+    edit = ProfileEdit()
 
     resolved = resolve_source(
         Path(args.source),
@@ -2008,9 +2034,8 @@ def cmd_install(env: Env, args) -> dict:
 
         write_meta_ini(dest, resolved.version or args.version, args.comment)
 
-        tf = read_file(env.modlist)
+        tf = edit.read(env.modlist)
         priority = place_mod(tf, name, not args.no_enable, getattr(args, "priority", "bottom"))
-        write_file(tf)
 
         plugins = plugin_files(dest)
         plugin_after = getattr(args, "plugin_after", None)
@@ -2018,11 +2043,35 @@ def cmd_install(env: Env, args) -> dict:
         if plugin_after is None:
             plugin_after, plugin_before = priority_plugin_anchor(env, priority)
         activated = (
-            add_plugins(env, plugins, after=plugin_after, before=plugin_before)
+            add_plugins(env, plugins, after=plugin_after, before=plugin_before, edit=edit)
             if not args.no_enable else []
         )
         archives = bsa_files(dest)
-        archives_added = add_archives(env, archives, plugins) if not args.no_enable else []
+        archives_added = add_archives(env, archives, plugins, edit) if not args.no_enable else []
+
+        result = {
+            "installed": name,
+            "path": str(dest),
+            "enabled": not args.no_enable,
+            "priority": priority,
+            "plugins_found": plugins,
+            "plugins_activated": activated,
+            "archives_found": archives,
+            "archives_added": archives_added,
+            "fomod": bool(resolved.fomod),
+            "fomod_choices": "mo2ctl-fomod-choices.json" if resolved.fomod_choices else None,
+            "warnings": warnings,
+        }
+        if getattr(args, "no_manifest", False):
+            edit.manifest_skipped = "--no-manifest"
+        else:
+            manifest = read_manifest(env)
+            result["manifest"] = update_manifest_for_install(
+                env, manifest, result, resolved, args,
+            )
+            edit.manifest = manifest
+        result["profile_commit"] = commit_profile(env, edit, source="mo2ctl:install")
+        return result
     except Exception:
         if owns_dest:
             shutil.rmtree(dest, ignore_errors=True)
@@ -2030,30 +2079,6 @@ def cmd_install(env: Env, args) -> dict:
     finally:
         if resolved.cleanup:
             shutil.rmtree(resolved.cleanup, ignore_errors=True)
-
-    result = {
-        "installed": name,
-        "path": str(dest),
-        "enabled": not args.no_enable,
-        "priority": priority,
-        "plugins_found": plugins,
-        "plugins_activated": activated,
-        "archives_found": archives,
-        "archives_added": archives_added,
-        "fomod": bool(resolved.fomod),
-        "fomod_choices": "mo2ctl-fomod-choices.json" if resolved.fomod_choices else None,
-        "warnings": warnings,
-    }
-    if getattr(args, "no_manifest", False):
-        edit = ProfileEdit(manifest_skipped="--no-manifest")
-    else:
-        manifest = read_manifest(env)
-        result["manifest"] = update_manifest_for_install(
-            env, manifest, result, resolved, args,
-        )
-        edit = ProfileEdit(manifest=manifest)
-    result["profile_commit"] = commit_profile(env, edit, source="mo2ctl:install")
-    return result
 
 
 def write_meta_ini(dest: Path, version: str, comment: str) -> None:
@@ -2070,36 +2095,33 @@ def write_meta_ini(dest: Path, version: str, comment: str) -> None:
 
 def cmd_uninstall(env: Env, args) -> dict:
     require_writable(args)
+    edit = ProfileEdit()
 
     name = args.name
     dest = env.mods / name
     plugins = plugin_files(dest) if dest.is_dir() else []
     archives = bsa_files(dest) if dest.is_dir() else []
 
-    tf = read_file(env.modlist)
+    tf = edit.read(env.modlist)
     idx = modlist_index(tf, name)
     if idx is not None:
         tf.lines.pop(idx)
-        write_file(tf)
 
-    removed_plugins = remove_plugins(env, plugins)
-    removed_archives = remove_archives(env, archives, plugins)
+    removed_plugins = remove_plugins(env, plugins, edit)
+    removed_archives = remove_archives(env, archives, plugins, edit)
 
-    removed_files = False
-    if dest.is_dir() and not args.keep_files:
-        shutil.rmtree(dest)
-        removed_files = True
+    removed_files = dest.is_dir() and not args.keep_files
 
     if idx is None and not removed_files and not removed_plugins and not removed_archives:
         raise Fail(f"nothing to uninstall: {name} is not in the modlist and has no folder")
 
     if getattr(args, "keep_manifest", False):
         manifest_removed = False
-        edit = ProfileEdit(manifest_skipped="--keep-manifest")
+        edit.manifest_skipped = "--keep-manifest"
     else:
         manifest = read_manifest(env)
         manifest_removed = remove_manifest_entry(manifest, name)
-        edit = ProfileEdit(manifest=manifest)
+        edit.manifest = manifest
 
     result = {
         "uninstalled": name,
@@ -2110,6 +2132,8 @@ def cmd_uninstall(env: Env, args) -> dict:
         "removed_manifest": manifest_removed,
     }
     result["profile_commit"] = commit_profile(env, edit, source="mo2ctl:uninstall")
+    if removed_files:
+        shutil.rmtree(dest)
     return result
 
 
@@ -2267,10 +2291,18 @@ def cmd_try_fail(env: Env, args) -> dict:
     result["profile_commit"] = commit_profile(
         env, ProfileEdit(), source="mo2ctl:try-fail",
     )
-    # profile-state.json is operational state and is expected to be ignored by
-    # the profile repo.  Older repos without that ignore rule must still finish
-    # try-fail clean, matching the command's existing rollback guarantee.
-    git_profiles(env, ["clean", "-f", "--", env.profile_state.name])
+    # Retain the new checkpoint even in legacy repos which do not ignore it.
+    # Record only generated ledger changes; never clean away the checkpoint.
+    checkpoint_paths = []
+    for path in (env.manifest, env.profile_state):
+        if path.is_file() and git_profiles(
+                env, ["check-ignore", "-q", "--", path.name], check=False).returncode != 0:
+            checkpoint_paths.append(path.name)
+    if checkpoint_paths:
+        git_profiles(env, ["add", "--", *checkpoint_paths])
+        if git_profiles(env, ["diff", "--cached", "--quiet"], check=False).returncode:
+            git_profiles(env, ["commit", "-m", "Checkpoint restored profile after try-fail"])
+    result["head"] = git_head(env)
     return result
 
 
@@ -2280,6 +2312,7 @@ def cmd_try_pass(env: Env, args) -> dict:
     if not branch.startswith("try/") and not args.force:
         raise Fail(f"refusing to pass non-try branch: {branch} (use --force to override)")
 
+    checkpoint = commit_profile(env, ProfileEdit(), source="mo2ctl:try-pass")
     dirty = git_porcelain(env)
     committed = None
     if dirty:
@@ -2295,6 +2328,7 @@ def cmd_try_pass(env: Env, args) -> dict:
 
     return {
         "passed": branch,
+        "profile_commit": checkpoint,
         "checked_out": PROFILE_MAIN_BRANCH,
         "committed": committed,
         "merged_head": git_head(env),
@@ -2304,26 +2338,28 @@ def cmd_try_pass(env: Env, args) -> dict:
 
 def cmd_enable(env: Env, args) -> dict:
     require_writable(args)
-    result = set_mod_state(env, args.name, True)
+    edit = ProfileEdit()
+    result = set_mod_state(env, args.name, True, edit)
     plugins = plugin_files(env.mods / args.name) if (env.mods / args.name).is_dir() else []
     output = {"mod": args.name, "enabled": True, "modlist": result,
               "plugins_activated": add_plugins(
-                  env, plugins, after=getattr(args, "plugin_after", None),
+                  env, plugins, after=getattr(args, "plugin_after", None), edit=edit,
               )}
     output["profile_commit"] = commit_profile(
-        env, ProfileEdit(), source="mo2ctl:enable",
+        env, edit, source="mo2ctl:enable",
     )
     return output
 
 
 def cmd_disable(env: Env, args) -> dict:
     require_writable(args)
-    result = set_mod_state(env, args.name, False)
+    edit = ProfileEdit()
+    result = set_mod_state(env, args.name, False, edit)
     plugins = plugin_files(env.mods / args.name) if (env.mods / args.name).is_dir() else []
     output = {"mod": args.name, "enabled": False, "modlist": result,
-              "plugins_deactivated": remove_plugins(env, plugins)}
+              "plugins_deactivated": remove_plugins(env, plugins, edit)}
     output["profile_commit"] = commit_profile(
-        env, ProfileEdit(), source="mo2ctl:disable",
+        env, edit, source="mo2ctl:disable",
     )
     return output
 
@@ -2340,6 +2376,10 @@ def cmd_reconcile(env: Env, args) -> dict:
 
     checkpoint = None
     changed_files = []
+    checkpoint_missing = checkpoint_state is None
+    profile_mismatch = bool(checkpoint_state and checkpoint_state.get("profile") != env.profile)
+    manifest_changed = bool(checkpoint_state and
+                            checkpoint_state.get("manifest_sha256") != sha256_file(env.manifest))
     if checkpoint_state is not None:
         checkpoint = {
             "checkpoint_at": checkpoint_state.get("checkpoint_at"),
@@ -2362,6 +2402,9 @@ def cmd_reconcile(env: Env, args) -> dict:
         "only_in_manifest": len(diff["only_in_manifest"]),
         "enabled_mismatch": len(diff["enabled_mismatch"]),
         "checkpoint": checkpoint,
+        "checkpoint_missing": checkpoint_missing,
+        "profile_mismatch": profile_mismatch,
+        "manifest_changed": manifest_changed,
         "external_write_detected": bool(checkpoint and changed_files),
         "changed_files": changed_files,
         "applied": False,
@@ -2384,9 +2427,15 @@ def cmd_reconcile(env: Env, args) -> dict:
             "enabled_mismatch": len(applied_diff["enabled_mismatch"]),
         })
     elif getattr(args, "fail_on_drift", False) and (
-            result["external_write_detected"] or diff["enabled_mismatch"]):
+            result["external_write_detected"] or checkpoint_missing or profile_mismatch
+            or manifest_changed or diff["enabled_mismatch"]):
         raise Fail("profile drift detected")
 
+    result["diff_summary"] = (
+        f"enabled={result['modlist_enabled']} provenance={result['manifest_mods']} "
+        f"unregistered={result['only_in_modlist']} stale={result['only_in_manifest']} "
+        f"enabled_mismatch={result['enabled_mismatch']}"
+    )
     return result
 
 

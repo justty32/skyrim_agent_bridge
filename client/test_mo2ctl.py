@@ -448,6 +448,10 @@ class Mo2CtlProfileGitTests(unittest.TestCase):
         result = mo2ctl.cmd_try_fail(self.env, self.args(uninstall=[], force=False))
 
         self.assertEqual(result["checked_out"], "main")
+        self.assertTrue(self.env.profile_state.is_file())
+        checkpoint = json.loads(self.env.profile_state.read_text())
+        self.assertEqual(checkpoint["files"]["modlist"]["sha256"],
+                         mo2ctl.sha256_file(self.env.modlist))
         self.assertFalse((self.root / "mods" / "New Mod").exists())
         self.assertNotIn(b"New Mod", (self.profile / "modlist.txt").read_bytes())
         self.assertEqual(self.git("branch", "--show-current").stdout.strip(), "main")

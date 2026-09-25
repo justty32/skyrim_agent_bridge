@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -173,6 +174,107 @@ class Mo2CtlCheckpointTests(unittest.TestCase):
         self.assertEqual(result["changed_files"], ["modlist"])
         with self.assertRaises(mo2ctl.Fail):
             self.invoke("reconcile", "--fail-on-drift")
+
+    def snapshot(self):
+        return {p.relative_to(self.root): (p.read_bytes(), p.stat().st_mtime_ns)
+                for p in self.root.rglob("*") if p.is_file()}
+
+    def test_commit_profile_stages_triplet_and_preserves_provenance(self):
+        self.write_manifest({"Known Mod": {"enabled": False, "source_url": "original",
+                                           "priority": "bottom", "plugins": ["Known.esp"]}})
+        edit = mo2ctl.ProfileEdit()
+        edit.read(self.env.modlist).lines.append("+Unknown")
+        edit.read(self.env.plugins).lines.append("*Unknown.esp")
+        edit.read(self.env.loadorder).lines.append("Unknown.esp")
+        before = self.snapshot()
+        self.assertEqual(self.snapshot(), before)
+        result = mo2ctl.commit_profile(self.env, edit, source="test")
+        self.assertFalse(result["manifest_written"])
+        self.assertEqual(self.manifest_path.read_bytes(), before[Path("profiles/manifest.json")][0])
+        state = self.read_state()
+        self.assertEqual(state["plugin_order"], ["Unknown.esp"])
+        self.assertEqual(state["load_order"], ["Unknown.esp"])
+        self.assertEqual(state["mod_order"], [["Known Mod", False], ["Unknown", True]])
+        self.assertEqual(state["unregistered"], ["Unknown"])
+        self.assertTrue(self.env.modlist.read_bytes().endswith(b"+Unknown\r\n"))
+        self.assertEqual(state["files"]["plugins"]["sha256"], mo2ctl.sha256_file(self.env.plugins))
+        self.assertEqual(state["manifest_sha256"], mo2ctl.sha256_file(self.env.manifest))
+
+    def test_invalid_plugin_anchor_does_not_partially_enable_mod(self):
+        mod = self.env.mods / "Known Mod"
+        mod.mkdir()
+        (mod / "Known.esp").write_bytes(b"")
+        before = self.snapshot()
+        with self.assertRaises(mo2ctl.Fail):
+            self.invoke("enable", "Known Mod", "--plugin-after", "Missing.esp")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_checkpoint_failure_rolls_back_triplet_manifest_and_mtimes(self):
+        self.write_manifest({"Known Mod": {"enabled": False}})
+        self.invoke("reconcile", "--apply")
+        paths = [self.env.modlist, self.env.plugins, self.env.loadorder,
+                 self.env.manifest, self.env.profile_state]
+        before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in paths}
+        edit = mo2ctl.ProfileEdit()
+        mo2ctl.set_mod_state(self.env, "Known Mod", True, edit)
+        mo2ctl.add_plugins(self.env, ["Known.esp"], edit=edit)
+        with patch.object(mo2ctl, "write_profile_state", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                mo2ctl.commit_profile(self.env, edit, source="test")
+        self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in paths}, before)
+        self.assertFalse(self.invoke("reconcile", "--fail-on-drift")["external_write_detected"])
+
+    def test_bad_manifest_prevents_profile_write(self):
+        self.manifest_path.write_text("{broken", encoding="utf-8")
+        before = self.snapshot()
+        with self.assertRaises(mo2ctl.Fail):
+            self.invoke("enable", "Known Mod")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_reconcile_with_checkpoint_is_entirely_read_only(self):
+        self.invoke("reconcile", "--apply")
+        self.env.plugins.write_bytes(b"*External.esp\r\n")
+        self.env.loadorder.write_bytes(b"External.esp\r\n")
+        before = self.snapshot()
+        result = self.invoke("reconcile")
+        self.assertEqual(result["changed_files"], ["plugins", "loadorder"])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_reconcile_apply_keeps_triplet_bytes_and_mtimes(self):
+        self.write_reconcile_fixture()
+        paths = [self.env.modlist, self.env.plugins, self.env.loadorder]
+        before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in paths}
+        self.invoke("reconcile", "--apply")
+        self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in paths}, before)
+        self.assertEqual(self.read_manifest()["mods"]["A"]["source_path"], "/archives/A.zip")
+        self.invoke("reconcile", "--fail-on-drift")
+
+    def test_reconcile_missing_checkpoint_fails_drift_gate(self):
+        with self.assertRaises(mo2ctl.Fail):
+            self.invoke("reconcile", "--fail-on-drift")
+        self.assertFalse(self.state_path.exists())
+
+    def test_reconcile_detects_manifest_only_change_and_wrong_profile(self):
+        self.invoke("reconcile", "--apply")
+        self.write_manifest({"Known Mod": {"enabled": False}})
+        self.assertTrue(self.invoke("reconcile")["manifest_changed"])
+        with self.assertRaises(mo2ctl.Fail):
+            self.invoke("reconcile", "--fail-on-drift")
+        self.invoke("reconcile", "--apply")
+        state = self.read_state()
+        state["profile"] = "Another"
+        self.state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.assertTrue(self.invoke("reconcile")["profile_mismatch"])
+        with self.assertRaises(mo2ctl.Fail):
+            self.invoke("reconcile", "--fail-on-drift")
+
+    def test_reconcile_apply_obeys_process_guard_but_dry_run_does_not_need_it(self):
+        mo2ctl.profile_lock_reason = lambda: "MO2 is running"
+        before = self.snapshot()
+        self.invoke("reconcile")
+        with self.assertRaises(mo2ctl.Fail):
+            self.invoke("reconcile", "--apply")
+        self.assertEqual(self.snapshot(), before)
 
 
 if __name__ == "__main__":
