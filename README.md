@@ -157,8 +157,12 @@ Linux host 以 `clang-cl` cross-compile 成 Windows DLL。需要將 `xwin` splat
 `~/.xwin-cache` 並設定 `VCPKG_ROOT`：
 
 ```bash
-export VCPKG_ROOT="$HOME/dev/vcpkg" && cmake --preset build-release-clang-cl-linux && cmake --build build/release-clang-cl-linux
+export VCPKG_ROOT="$HOME/dev/vcpkg" && cmake --fresh --preset build-release-clang-cl-linux && cmake --build build/release-clang-cl-linux
 ```
+
+`--fresh` 不可省略：preset 以裸名 `clang-cl` 指定編譯器，第二次 configure 時 cache 中的
+絕對路徑與裸名不等，CMake 會中途重跑 configure 並失去 xwin toolchain 的 include／libpath，
+報 `Check for working CXX compiler: /usr/bin/clang-cl - broken`。
 
 輸出：`build/release-clang-cl-linux/AgentBridge.dll`。
 
