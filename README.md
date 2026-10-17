@@ -87,11 +87,8 @@ not-found。`loaded_actors.distance` 只有在 `same_cell` 為 true 時具有幾
 
 Linux 端位於 [`client/`](client/README.md)：`mo2ctl.py` 安裝、移除 mod 並啟動遊戲，
 `qa_runner.py` 執行 [`qa.json`](client/QA-SCHEMA.md)，`qa_mcp.py` 暴露常用 MCP tools。
-現役文件仍引用的階段報告保留於原路徑：
-
-- [P1 Archive + FOMOD report](client/P1-ARCHIVE-FOMOD-REPORT.md)
-- [P2 Profile Git report](client/P2-PROFILE-GIT-REPORT.md)
-- [P3 Static Gates report](client/P3-STATIC-GATES-REPORT.md)
+MCP 入口是 `client/qa_mcp.py`，被 agentctl 的 `mcp__skyrim-qa` 使用。
+P1–P3 一次性階段報告（Archive＋FOMOD、Profile Git、Static Gates）已封存在 `client/archive/`。
 
 ## Design notes
 
