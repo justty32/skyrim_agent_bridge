@@ -617,8 +617,17 @@ class Mo2CtlBackgroundActiveTests(unittest.TestCase):
         args = argparse.Namespace(
             shortcut="SKSE", wait=1, no_wait=False, background_active=True,
         )
+        # Hermetic: don't depend on the real instance/tools/launch-mo2.sh
+        # existing three levels up, and don't append to /tmp/mo2ctl-launch.log.
+        script = Path(self.tmp.name) / "launch-mo2.sh"
+        script.write_text("#!/bin/sh\n")
+        launch_env = {
+            "MO2CTL_LAUNCH_SCRIPT": str(script),
+            "MO2CTL_LOG_DIR": self.tmp.name,
+        }
 
-        with self.assertRaisesRegex(OSError, "spawn failed"):
+        with patch.dict(os.environ, launch_env), \
+                self.assertRaisesRegex(OSError, "spawn failed"):
             mo2ctl.cmd_launch(self.env, args)
 
         self.assertEqual((self.profile / "skyrim.ini").read_bytes(), original)
