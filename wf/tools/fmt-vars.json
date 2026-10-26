@@ -1,0 +1,8 @@
+{"contract": "wf-fmt-vars/1",
+ "vars": [
+   {"name": "fileDirname", "how": "file-dir",   "doc": "本 json 所在目錄", "aliases": []},
+   {"name": "gitRoot",     "how": "git-self",   "doc": "往上第一個含 .git（檔或目錄）的目錄", "aliases": []},
+   {"name": "gitParent",   "how": "git-parent", "doc": "從 gitRoot 再往上第一個含 .git；沒有＝gitRoot", "aliases": []},
+   {"name": "gitTop",      "how": "git-top",    "doc": "往上最後一個含 .git；沒有上層＝gitRoot", "aliases": []}
+ ],
+ "namespaces": [{"prefix": "env", "how": "env", "doc": "環境變數 ${env:NAME}；不存在→錯誤、空→空字串"}]}
