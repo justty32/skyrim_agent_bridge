@@ -29,9 +29,7 @@ SKSE 的 `kPostLoadGame` payload 是 scalar `(void*)result`，`dataLen == 1`，�
 長度正好為 `sizeof(bool)`、scalar value 為 `1` 時前進 epoch。Compile-time checks 涵蓋
 success、failure、malformed value 與 malformed length；upstream contract 見
 [`skse64/Hooks_SaveLoad.cpp`](https://github.com/ianpatt/skse64/blob/master/skse64/Hooks_SaveLoad.cpp)。
-修正版 DLL SHA-256 為
-`be09f146a2771f5c6e84f21be2f2bd3191eecaa8b685836ea751af04eb152051`；`/ping` 版本來自
-CMake `PROJECT_VERSION`。
+`/ping` 版本來自 CMake `PROJECT_VERSION`。
 
 `game.load_epoch` 只證明成功載入；若規格要求沒有延遲 modal，仍須在 load 後加入明確
 observation window。`include=plugins` 回傳 engine 實際解析的 load order，應以此驗證安裝；
@@ -67,4 +65,3 @@ not-found。`loaded_actors.distance` 只有在 `same_cell` 為 true 時具有幾
 Linux 端位於 [`client/`](../client/README.md)：`mo2ctl.py` 安裝、移除 mod 並啟動遊戲，
 `qa_runner.py` 執行 [`qa.json`](../client/QA-SCHEMA.md)，`qa_mcp.py` 暴露常用 MCP tools。
 MCP 入口是 `client/qa_mcp.py`，被 agentctl 的 `mcp__skyrim-qa` 使用。
-P1–P3 一次性階段報告（Archive＋FOMOD、Profile Git、Static Gates）已封存在 `client/archive/`。

@@ -22,7 +22,7 @@
 ```
 
 `--json` on any subcommand (either side of it) for machine-readable output; that's
-what the Phase 3 runner will use. Overrides: `MO2_ROOT`, `MO2_PROFILE` (otherwise
+what the QA runner uses. Overrides: `MO2_ROOT`, `MO2_PROFILE` (otherwise
 read from `ModOrganizer.ini`'s `selected_profile`).
 
 `install` takes a `.zip`, a mod folder, a folder whose only child is `Data/`, or a bare
@@ -30,7 +30,7 @@ read from `ModOrganizer.ini`'s `selected_profile`).
 `.7z` and `.rar` are routed through `7z` or `unar` when one is available; otherwise the
 tool returns `handoff_user` and expects a manually unpacked folder.
 
-New mods now default to `--priority bottom` in `modlist.txt`, so an unverified texture /
+New mods default to `--priority bottom` in `modlist.txt`, so an unverified texture /
 mesh / script mod does not silently win every file conflict. Use `--priority top`,
 `--priority before:<mod name>`, or `--priority after:<mod name>` when a deliberate
 insertion point is known. Plugin order is still appended to `plugins.txt` /

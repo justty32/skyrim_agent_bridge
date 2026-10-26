@@ -10,7 +10,7 @@ entry records `archive_library: unchecked`. The URI defaults to
 `mongodb://127.0.0.1:27017` (matching `mod-library/db/*.py`) and can be overridden
 with `SKYRIM_MONGO_URI`.
 
-Every install, uninstall, enable, disable, and completed try now ends at one profile
+Every install, uninstall, enable, disable, and completed try ends at one profile
 checkpoint boundary. `profiles/manifest.json` remains the provenance ledger, while
 `profiles/profile-state.json` records the live profile hashes, enabled mods, plugin
 order, and manifest drift. `reconcile` is read-only by default and reports external

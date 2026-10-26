@@ -10,8 +10,6 @@
 `scene-capture-bridge` 則是由人以 hotkey 與 ImGui 操作、隨內容交付的 **authoring tool**。
 兩者生命週期相反，因此保持為同層 repo；需要共用 scene-walking 邏輯時，將所需部分提取到
 `agent-bridge`，不要把可執行 console command 的 listening socket 併入 authoring tool。
-背景理由見 `ai-ingame-qa-loop/context.md` decision D1：
-Wayland、非 XWayland 視窗與 Proton pressure-vessel 使螢幕擷取加模擬輸入不可靠。
 
 ## Status
 
@@ -21,8 +19,7 @@ MessageBox，以及 manifest + load-epoch baseline 路徑均已通過 runtime �
 tree、controller bounds 與 proxy contact margins。驗證值為：`bhkCharProxyController` capsule
 radius `0.294322 m`、axis `1.118425 m`、total `1.707070 m`；完整 active-list AABB 為
 `0.614350 × 0.844350 × 1.928800 m`，`keepDistance=0.050000 m`、
-`keepContactTolerance=0.100000 m`。驗證用 DLL SHA-256：
-`9c11b037a803357980946a09ef411038a91fee7f8937ca6e8fcf0141b0d2257c`.
+`keepContactTolerance=0.100000 m`。
 
 技術文件見 [docs/](docs/README.md)，Linux 工具見 [client/](client/README.md)。
 

@@ -22,15 +22,7 @@ connection，使用 `Connection: close`，request 上限 1 MiB。
 ## Pitfall: do not hook `ConsoleLog::VPrint`
 
 **禁止 hook `ConsoleLog::VPrint`。** 在有其他 console plugin 的 load order 中，五-byte
-prologue detour 會互相覆寫；曾於 Papyrus VM init 約 6.6 秒時 crash：
-
-```
-Unhandled exception "EXCEPTION_ACCESS_VIOLATION" at 0x000158B3D6AE
-Access Violation: Tried to execute memory at 0x000158B3D6AE
-[ 0][P] 0x000158B3D6AE
-[ 1][S] 0x6FFFEA014404   AgentBridge.dll+0054404
-[ 2][S] 0x6FFFE9819F94   ConsoleUtilSSE.dll+00B9F94
-```
+prologue detour 會互相覆寫並造成 crash。
 
 `write_branch<5>` 只保存被覆寫的 5 bytes；當 `MoreInformativeConsole.dll`、
 `ConsoleUtilSSE.dll` 等 plugin 也 patch 同一位置時，保存的「原始」內容可能已是別人的半段
