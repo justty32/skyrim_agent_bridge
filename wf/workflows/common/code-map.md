@@ -6,11 +6,18 @@
 
 ## 領域表
 
+<!-- wf-nav -->
 | 領域 | 檔案 | 職責 | 測試在哪 |
 |------|------|------|---------|
 | HTTP／路由 | `src/HttpServer.*`、`src/Routes.*`、`src/GameThread.h` | 手寫 HTTP（loopback 5099）、route 分派、marshal 到 game thread | （無 C++ 測試；經 client 測試與遊戲內驗證） |
 | 遊戲狀態 | `src/State*.cpp`、`src/GameActions.*`、`src/Console.*`、`src/MessageBox.*` | `/state`、actor 移動／啟動、console、結構化 MessageBox／dialogue | `client/test_bridge.py`（client 側契約） |
-| Python client | `client/*.py` | mo2ctl（MO2 無 GUI 操作）、bridge（HTTP client）、qa_runner、qa_mcp | `client/test_*.py` |
+| MO2 入口／交易 | [mo2ctl.py](../../../client/mo2ctl.py) | CLI、原名稱 re-export、mutating commands 與 process control；monkeypatch 的名稱及呼叫鏈留同模組 | `client/test_mo2ctl.py`、`test_mo2ctl_launch.py`、`test_mo2ctl_checkpoint.py` |
+| MO2 環境／profile | [mo2ctl_env.py](../../../client/mo2ctl_env.py)、[mo2ctl_files.py](../../../client/mo2ctl_files.py)、[mo2ctl_background.py](../../../client/mo2ctl_background.py)、[mo2ctl_manifest.py](../../../client/mo2ctl_manifest.py)、[mo2ctl_profile_lists.py](../../../client/mo2ctl_profile_lists.py)、[mo2ctl_profile_git.py](../../../client/mo2ctl_profile_git.py) | 環境、檔案、INI 還原、ledger／快照、清單、Git 語意 | 同上 |
+| 安裝來源／FOMOD | [mo2ctl_archives.py](../../../client/mo2ctl_archives.py)、[mo2ctl_fomod_models.py](../../../client/mo2ctl_fomod_models.py)、[mo2ctl_fomod_parse.py](../../../client/mo2ctl_fomod_parse.py)、[mo2ctl_sources.py](../../../client/mo2ctl_sources.py) | 解壓、model／default choices、XML、來源 materialization | `client/test_mo2ctl.py` |
+| 靜態驗證 | [mo2ctl_housecarl.py](../../../client/mo2ctl_housecarl.py)、[mo2ctl_static_gates.py](../../../client/mo2ctl_static_gates.py)、[mo2ctl_crash.py](../../../client/mo2ctl_crash.py) | stdio MCP、baseline 分類、crash triage | `client/test_mo2ctl.py` |
+| QA 入口／執行 | [qa_runner.py](../../../client/qa_runner.py)、[qa_runner_common.py](../../../client/qa_runner_common.py)、[qa_runner_report.py](../../../client/qa_runner_report.py) | CLI、原名稱 re-export、Runner 與其 monkeypatch seam、共用結果型別、report | `client/test_qa_runner.py` |
+| QA 契約／指紋 | [qa_runner_conditions.py](../../../client/qa_runner_conditions.py)、[qa_runner_baseline_rules.py](../../../client/qa_runner_baseline_rules.py)、[qa_runner_baseline.py](../../../client/qa_runner_baseline.py)、[qa_runner_fingerprint.py](../../../client/qa_runner_fingerprint.py)、[qa_runner_validation.py](../../../client/qa_runner_validation.py) | JSON paths、manifest 規則／preflight、epoch／指紋、離線驗證 | `client/test_qa_runner.py` |
+| HTTP／MCP client | `client/bridge.py`、`client/qa_mcp.py`、`client/actor_value_probe.py` | HTTP client、MCP server、嚴格 actor value 讀取 | `client/test_bridge.py`、`test_qa_mcp.py`、`test_actor_value_probe.py` |
 
 
 ## 真相層優先序
