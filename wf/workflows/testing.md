@@ -17,6 +17,7 @@
 | 驗證 | 指令 | 誰跑 |
 |------|------|------|
 | 快速／完整驗證（改完必跑） | `python3 -m unittest discover -s client -p 'test*.py'` | agent |
+| NPC producer host test | `python3 -m unittest discover -s tests -v`（既有 g++／nlohmann headers；不需遊戲） | agent（改 NPC producer 時） |
 | DLL build | `cmake --fresh --preset build-release-clang-cl-linux && cmake --build build/release-clang-cl-linux`（先 `export VCPKG_ROOT`） | agent（改 `src/` 或 CMake 時；toolchain 在本機，需要時才跑） |
 | 遊戲內行為（`/state`、dialogue、MessageBox） | 遊戲在跑時 `qa_runner` 跑 `qa.json`，或 `curl 127.0.0.1:5099/ping` | 使用者 → [WAIT_USER](../../../../WAIT_USER.md)（或持 game lock 的線） |
 

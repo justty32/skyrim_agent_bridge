@@ -18,6 +18,7 @@ namespace GameActions {
         RE::FormID infoFormID{ 0 };
     };
 
+    nlohmann::json ActorDiagnostics(const ActorSelector& a_selector);
     nlohmann::json MoveToActor(const ActorSelector& a_selector, float a_distance);
     nlohmann::json ActivateActor(const ActorSelector& a_selector);
     nlohmann::json SelectDialogue(const DialogueSelector& a_selector);

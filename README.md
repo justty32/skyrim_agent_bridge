@@ -21,7 +21,7 @@ radius `0.294322 m`、axis `1.118425 m`、total `1.707070 m`；完整 active-lis
 `0.614350 × 0.844350 × 1.928800 m`，`keepDistance=0.050000 m`、
 `keepContactTolerance=0.100000 m`。
 
-單一 NPC 的雙手裝備／選用法術與 CSTY 診斷目前僅完成 [v1 契約與 Python 離線解析](docs/actor-diagnostics.md)；DLL 尚未接線，現役 bridge 明確回 `unsupported`。
+單一 NPC 的雙手裝備／選用法術與 CSTY 診斷已完成 [v1 DLL／Python 接線](docs/actor-diagnostics.md)與隔離 build；未部署／未做 live QA。舊 DLL 仍明確回 `unsupported`。
 
 技術文件見 [docs/](docs/README.md)，Linux 工具見 [client/](client/README.md)。
 
@@ -52,3 +52,5 @@ radius `0.294322 m`、axis `1.118425 m`、total `1.707070 m`；完整 active-lis
 ## Verifying it works
 
 詳見 [技術文件](docs/runtime-and-build.md#verifying-it-works)。
+
+單一 NPC 唯讀診斷的 [v1 契約](docs/actor-diagnostics.md)與 [隔離候選 DLL 驗證／停機部署回退](docs/actor-diagnostics-build.md)：producer／route 已完成離線驗證，live QA 尚未執行。

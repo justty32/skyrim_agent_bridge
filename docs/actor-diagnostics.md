@@ -2,12 +2,12 @@
 
 [文件入口](README.md)｜[現役 HTTP API](api.md)
 
-**狀態：Python 契約／解析與合成離線測試已實作；DLL 尚未接線，沒有 live 讀值或遊戲驗證。**
-現役 0.9.0 的 `/ping` 沒有本能力，client 會回 `unsupported`，不呼叫新 route。
-本文件的 route 與能力欄位是家中 DLL 接線契約，不是現役 API 清單。
+**狀態：DLL producer、GET route 與 v1 capability 已實作並完成離線 Windows x64 build；尚未部署，live QA 尚未執行。**
+舊 0.9.0 DLL 的 `/ping` 不含能力，既有 client 仍回 `unsupported`，不呼叫新 route。
+新候選 DLL 以 capability 協商；版本字串不作能力判斷。
 
-Done when: client 能協商 v1、驗證指定 NPC 的左右手與 CSTY 各項狀態，合成 fixture 與完整
-client suite 通過，code map／文件對齊。本階段不含 C++、DLL build、部署或遊戲驗證。
+Done when: v1 唯讀 snapshot／route／能力協商、必要正反與缺欄位測試、隔離 PE build、
+獨立 review、文件及停機部署／rollback 對齊。離線成果不等於遊戲驗收。
 
 ## 查詢與協商
 
@@ -30,7 +30,7 @@ NPC reference FormID，不接受名稱、base ID 或玩家 `0x14`；字串是十
 GET /actor/diagnostics?form_id=0x01001234&scope=cell&schema_version=1
 ```
 
-未來 DLL 必須在 game thread 取得同一份 snapshot；沿用 `GameActions.cpp` 的 FormID
+DLL 在 game thread 取得同一份 snapshot；沿用 `GameActions.cpp` 的 FormID
 selector 與 actor identity 慣例，但不呼叫移動／activate。`loaded` 的 FormID 路徑沿用既有
 known-reference 查找，並不保證 3D／process 可讀。找不到 actor、不是 NPC、scope 不符或
 整體查詢失敗皆為失敗回覆；不得偽造成所有手部為空。只有 route 讀值實作可用後才宣告能力。
@@ -101,9 +101,25 @@ python3 -m unittest discover -s client -p 'test*.py'
 ```
 
 CLI 成功 exit 0，身分不符／格式錯／查詢失敗 exit 1。省略 `--snapshot` 才會協商 live
-bridge；這個選項目前對現役 DLL 得到 `unsupported`。合成 fixture 不包含玩家或私有 NPC 證據。
+bridge；這個選項對沒有能力欄位的舊 DLL 得到 `unsupported`。合成 fixture 不包含玩家或私有 NPC 證據。
 
-家中下一步是實作 DLL read route／capability，先 build 與檢查 PE，再在授權的 runtime QA
-讀單一 NPC：同時比較左右手物件／選用法術，確認合法空槽、不可讀狀態及 CSTY 兩層有別；
-找不到 reference、無 game-thread 回應也須保留失敗狀態。記錄原始 snapshot 與實際觀察後
-才能宣稱 live 支援。本輪不設定 NPC、不部署、不啟動遊戲、不碰 profile／DB。
+C++ 入口為 `GameActions::ActorDiagnostics`（沿用 `FindActor` 的單一 FormID 查找及
+`ActorRef` 身分欄位），`Routes.cpp::ActorDiagnostics` 只在 game-thread task 中取得 pointer 與
+snapshot，socket thread 不保存 actor pointer。`currentProcess` 缺席時，雙手與 selected spells
+保守回 `unavailable: actor_process_unavailable`；base／extra CSTY 仍各自讀取。
+`selectedSpells` 本身位於 actor runtime，此 guard 是保守讀值策略，未聲稱陣列一定不可讀。
+未預期例外／zero FormID／不合法 signature 使整體查詢失敗。
+
+新增的 host test 以 RE doubles 執行原始 producer 函式，並把實際輸出交既有 Python parser，
+涵蓋 value／empty／unavailable、左右獨立、CSTY 兩層、lookup／base／metadata 失敗與缺欄位；
+不是 engine 行為測試。真 CommonLib 型別由 Windows build 驗證：
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+此測試使用既有 host `g++` 與預設 build 內的 nlohmann headers，不安裝依賴。
+隔離候選 build、PE 與停機部署回退見 [候選驗證紀錄](actor-diagnostics-build.md)。
+下次獲授權並停機部署後，才可做 live QA：指定單一 NPC，對照左右手／法術槽，驗合法空槽、
+不可讀狀態、CSTY base／override、找不到 reference 及 game-thread timeout；保存原始 snapshot
+與觀察。此次未呼叫 HTTP、未設定 NPC、未部署、未啟停遊戲、未碰 profile／DB。
