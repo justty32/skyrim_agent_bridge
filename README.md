@@ -21,7 +21,7 @@ radius `0.294322 m`、axis `1.118425 m`、total `1.707070 m`；完整 active-lis
 `0.614350 × 0.844350 × 1.928800 m`，`keepDistance=0.050000 m`、
 `keepContactTolerance=0.100000 m`。
 
-單一 NPC 的雙手裝備／選用法術與 CSTY 診斷已完成 [v1 DLL／Python 接線](docs/actor-diagnostics.md)與隔離 build，2026-11-02 已部署並通過一名同 cell 已載入 NPC 的 live read 驗證。舊 DLL 仍明確回 `unsupported`。
+單一 NPC 的雙手裝備／選用法術與 CSTY 診斷已完成 [v1 DLL／Python 接線](docs/actor-diagnostics.md)與隔離 build，2026-11-02 已部署並通過一名同 cell 已載入 NPC 的 live read 驗證。舊 DLL 仍明確回 `unsupported`；[建置／live 證據與未驗範圍](docs/actor-diagnostics-build.md)保留完整界線。
 
 技術文件見 [docs/](docs/README.md)，Linux 工具見 [client/](client/README.md)。
 NPC 原始碼按 actor query／snapshot／HTTP handler 分工；[重構與未部署驗證紀錄](wf/workflows/refactor/actor-diagnostics.md)保留來源界線。
@@ -53,5 +53,3 @@ NPC 原始碼按 actor query／snapshot／HTTP handler 分工；[重構與未部
 ## Verifying it works
 
 詳見 [技術文件](docs/runtime-and-build.md#verifying-it-works)。
-
-單一 NPC 唯讀診斷的 [v1 契約](docs/actor-diagnostics.md)與 [隔離候選 DLL 驗證／停機部署回退](docs/actor-diagnostics-build.md)：producer／route 已完成離線驗證及一名同 cell 已載入 NPC 的 live read 驗證；其餘 live 邊界見證據頁。

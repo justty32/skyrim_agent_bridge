@@ -91,7 +91,7 @@ known-reference 查找，並不保證 3D／process 可讀。找不到 actor、�
 成功檢查 extra 缺席或其中 pointer 為 null 時可回 `empty`；若不能安全檢查則回 `unavailable`。
 兩欄有值皆須為 `CSTY`。本契約不定義 `effective`、不推斷引擎選用優先序，不承諾其持久性。
 
-## 離線使用與家中接線
+## 使用方式與實作入口
 
 在 repo 根目錄執行：
 
