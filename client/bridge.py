@@ -18,6 +18,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from actor_diagnostics import query_actor_diagnostics
+
 BASE_URL = "http://127.0.0.1:5099"
 
 # The DLL binds INADDR_LOOPBACK deliberately — it runs console commands, so it must
@@ -149,6 +151,15 @@ def global_value(editor_id: str, *, timeout: float = DEFAULT_TIMEOUT) -> dict:
     """Read a TESGlobal by EditorID without relying on console output."""
     query = urllib.parse.urlencode({"editor_id": editor_id})
     return _request("GET", f"/global?{query}", timeout=timeout)
+
+
+def actor_diagnostics(*, form_id: str | int, scope: str = "cell",
+                      timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """Read one NPC using schema 1, only if the DLL advertises support.
+
+    Current DLLs lack this capability and return unsupported. No console fallback.
+    """
+    return query_actor_diagnostics(_request, form_id=form_id, scope=scope, timeout=timeout)
 
 
 def actor_value(name: str, ref: str, *, consecutive: int = 3,

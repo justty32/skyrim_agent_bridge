@@ -21,6 +21,8 @@ radius `0.294322 m`、axis `1.118425 m`、total `1.707070 m`；完整 active-lis
 `0.614350 × 0.844350 × 1.928800 m`，`keepDistance=0.050000 m`、
 `keepContactTolerance=0.100000 m`。
 
+單一 NPC 的雙手裝備／選用法術與 CSTY 診斷目前僅完成 [v1 契約與 Python 離線解析](docs/actor-diagnostics.md)；DLL 尚未接線，現役 bridge 明確回 `unsupported`。
+
 技術文件見 [docs/](docs/README.md)，Linux 工具見 [client/](client/README.md)。
 
 ### Baseline load proof

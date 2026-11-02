@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "schema_version": 1,
+  "actor": {"name": "Synthetic NPC", "form_id": 16781876, "base_form_id": 16781877},
+  "equipped": {
+    "right": {"status": "value", "value": {"name": "Synthetic sword", "editor_id": "TestSword", "form_id": 16781878, "form_type": "WEAP"}},
+    "left": {"status": "empty", "value": null}
+  },
+  "selected_spells": {
+    "right": {"status": "empty", "value": null},
+    "left": {"status": "value", "value": {"name": "", "editor_id": "", "form_id": 16781879, "form_type": "SPEL"}}
+  },
+  "combat_style": {
+    "base": {"status": "value", "value": {"name": "", "editor_id": "TestStyle", "form_id": 16781880, "form_type": "CSTY"}},
+    "reference_override": {"status": "unavailable", "reason": "reader_not_available"}
+  }
+}

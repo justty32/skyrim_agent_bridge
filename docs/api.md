@@ -15,6 +15,8 @@
 | `POST /dialogue/close` | game thread | 結束目前玩家對話。 |
 | `POST /messagebox/select` | game thread | `{"text":"OK","message":"Done Writing"}` 或 `{"index":0}`；選用 exact `message` guard 可防止 modal 內容改變後誤按。 |
 
+單一 NPC 裝備／法術／CSTY 的 [v1 診斷契約](actor-diagnostics.md)目前只有 Python 協商／解析與離線測試；DLL 尚無該 route 或 capability，不列入上表現役 API。
+
 ### Baseline load proof
 
 Raw API 以 `{"cmd": "load <save filename without extension>"}` 載入存檔，但非同步 command

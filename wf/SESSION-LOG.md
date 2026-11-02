@@ -11,7 +11,7 @@
 
 ## 最新進度
 
-（目前無）
+- [feature-dev] 單一 NPC 診斷的 v1 契約／Python 階段已完成（136 tests 通過）；DLL producer 尚未實作、現役回 `unsupported` → 家中環境續接 [最小接線與驗證](../docs/actor-diagnostics.md#離線使用與家中接線)，未部署／未驗遊戲。
 
 ## 各工作流 session-log
 
