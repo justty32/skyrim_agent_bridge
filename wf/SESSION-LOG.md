@@ -11,9 +11,9 @@
 
 ## 最新進度
 
-目前沒有可離線續行的 open 工作。單一 NPC v1 接線、隔離 build 與一名同 cell 已載入 NPC
-的 live read 已完成；[已驗／未驗範圍](../docs/actor-diagnostics-build.md#live-驗證範圍2026-11-02)
-由文件承接，後續部署與 runtime 管理由部署線管理。
+目前沒有可離線續行的 open 工作。NPC source 分拆與隔離驗證由
+[重構紀錄](workflows/refactor/actor-diagnostics.md)承接；現役 DLL 與有限 live 範圍仍見
+[候選紀錄](../docs/actor-diagnostics-build.md)，本次重構產物未部署。
 
 ## 各工作流 session-log
 

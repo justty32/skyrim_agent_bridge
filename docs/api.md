@@ -16,6 +16,9 @@
 | `POST /dialogue/close` | game thread | 結束目前玩家對話。 |
 | `POST /messagebox/select` | game thread | `{"text":"OK","message":"Done Writing"}` 或 `{"index":0}`；選用 exact `message` guard 可防止 modal 內容改變後誤按。 |
 
+診斷 handler 位於 `src/ActorDiagnosticsRoute.cpp`，`Routes::Register` 維持相同的 GET route；
+此 source 分拆不改契約、game-thread task 或 timeout。
+
 `/ping` 在新候選 DLL 宣告 `capabilities.actor_diagnostics: [1]`；舊 DLL 不宣告時 client 保留 `unsupported`。
 
 ### Baseline load proof

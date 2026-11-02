@@ -30,7 +30,7 @@ NPC reference FormID，不接受名稱、base ID 或玩家 `0x14`；字串是十
 GET /actor/diagnostics?form_id=0x01001234&scope=cell&schema_version=1
 ```
 
-DLL 在 game thread 取得同一份 snapshot；沿用 `GameActions.cpp` 的 FormID
+DLL 在 game thread 取得同一份 snapshot；沿用 `ActorQueries.cpp` 的 FormID
 selector 與 actor identity 慣例，但不呼叫移動／activate。`loaded` 的 FormID 路徑沿用既有
 known-reference 查找，並不保證 3D／process 可讀。找不到 actor、不是 NPC、scope 不符或
 整體查詢失敗皆為失敗回覆；不得偽造成所有手部為空。只有 route 讀值實作可用後才宣告能力。
@@ -47,7 +47,7 @@ known-reference 查找，並不保證 3D／process 可讀。找不到 actor、�
 
 `actor` 至少含字串 `name`、整數 `form_id`、整數 `base_form_id`。兩個 ID 皆須非零 uint32，
 `actor.form_id` 必須等於請求的 runtime reference；base ID 不拿來作 reference 身分比對。
-這與現有 `StateActors.cpp`／`GameActions.cpp` 的命名一致。
+這與現有 `StateActors.cpp`／`ActorQueries.cpp` 的命名一致。
 
 每個讀值是一個有明確 `status` 的物件：
 
@@ -103,8 +103,10 @@ python3 -m unittest discover -s client -p 'test*.py'
 CLI 成功 exit 0，身分不符／格式錯／查詢失敗 exit 1。省略 `--snapshot` 才會協商 live
 bridge；這個選項對沒有能力欄位的舊 DLL 得到 `unsupported`。合成 fixture 不包含玩家或私有 NPC 證據。
 
-C++ 入口為 `GameActions::ActorDiagnostics`（沿用 `FindActor` 的單一 FormID 查找及
-`ActorRef` 身分欄位），`Routes.cpp::ActorDiagnostics` 只在 game-thread task 中取得 pointer 與
+C++ 入口為 `ActorDiagnostics.cpp` 的 `GameActions::ActorDiagnostics`；
+`ActorQueries.*` 共用 `FindActor` 的單一 FormID 查找與 `ActorRef` 身分欄位。
+`ActorDiagnosticsRoute.cpp::ActorDiagnosticsRoute::Handle` 使用 `RouteParsing.h` 的完整
+FormID parser，只在 game-thread task 中取得 pointer 與
 snapshot，socket thread 不保存 actor pointer。`currentProcess` 缺席時，雙手與 selected spells
 保守回 `unavailable: actor_process_unavailable`；base／extra CSTY 仍各自讀取。
 `selectedSpells` 本身位於 actor runtime，此 guard 是保守讀值策略，未聲稱陣列一定不可讀。
@@ -120,6 +122,8 @@ python3 -m unittest discover -s tests -v
 
 此測試使用既有 host `g++` 與預設 build 內的 nlohmann headers，不安裝依賴。
 隔離候選 build、PE 與停機部署回退見 [候選驗證紀錄](actor-diagnostics-build.md)。
+後續 source 分拆僅離線驗證、未重新部署；[重構紀錄](../wf/workflows/refactor/actor-diagnostics.md)
+保留新舊來源界線，不取代原候選的 live 證據。
 2026-11-02 部署線已在既存存檔的一名同 cell 已載入 NPC 上驗證 capability、原始 route
 與 strict client，schema 1 成功；右手 `WEAP`、左手 `empty`，selected spells 雙手皆 `SPEL`，
 base CSTY 為 `value`、reference override 為 `empty`。SKSE 載入、`/ping` 與 `/state` 均成功。

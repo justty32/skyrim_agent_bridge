@@ -23,6 +23,7 @@
 
 | 檔案 | 內容 |
 |------|------|
+| [actor-diagnostics.md](actor-diagnostics.md) | 2026-11-02 NPC query／producer／route 分拆與離線驗證紀錄 |
 | [moving-things.md](moving-things.md) | 搬檔／改目錄名／拆 repo：六類會斷的東西與驗證程序 |
 
 ## 交接

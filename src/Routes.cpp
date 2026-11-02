@@ -1,5 +1,8 @@
 #include "Routes.h"
 
+#include "ActorDiagnosticsRoute.h"
+#include "RouteParsing.h"
+
 #include "Console.h"
 #include "GameActions.h"
 #include "GameThread.h"
@@ -7,32 +10,18 @@
 #include "MessageBox.h"
 #include "State.h"
 
-#include <charconv>
 #include <cmath>
 #include <optional>
 #include <unordered_set>
 
 using json = nlohmann::json;
+using RouteParsing::ParseFormID;
 
 #ifndef AGENT_BRIDGE_VERSION
 #error "AGENT_BRIDGE_VERSION must come from the CMake project version"
 #endif
 
 namespace {
-    // "0x14" / "14" / "0X14" -> 0x14. The whole string must be valid.
-    std::optional<RE::FormID> ParseFormID(std::string_view s)
-    {
-        if (s.starts_with("0x") || s.starts_with("0X")) {
-            s.remove_prefix(2);
-        }
-        if (s.empty()) return std::nullopt;
-
-        RE::FormID value = 0;
-        const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), value, 16);
-        if (ec != std::errc{} || ptr != s.data() + s.size()) return std::nullopt;
-        return value;
-    }
-
     RE::FormID BodyFormID(const json& a_body, std::string_view a_key, bool a_rejectInvalid = false)
     {
         const auto it = a_body.find(a_key);
@@ -195,27 +184,6 @@ namespace {
         return Http::Response::Ok(*ran);
     }
 
-    Http::Response ActorDiagnostics(const Http::Request& req)
-    {
-        if (req.Get("schema_version") != "1") {
-            return Http::Response{ 400, { { "ok", false }, { "status", "unsupported" },
-                                         { "error", "schema_version must be 1" } } };
-        }
-        const auto id = ParseFormID(req.Get("form_id"));
-        const auto scope = req.Get("scope").empty() ? std::string{ "cell" } : req.Get("scope");
-        if (!id || *id == 0 || *id == 0x14 || (scope != "cell" && scope != "loaded") || !req.Get("name").empty()) {
-            return Http::Response::Error(400, "a single NPC reference form_id and cell/loaded scope are required");
-        }
-        const GameActions::ActorSelector selector{ .name = {}, .formID = *id, .loadedScope = scope == "loaded" };
-        try {
-            auto result = GameThread::Run([selector] { return GameActions::ActorDiagnostics(selector); });
-            if (!result) return Http::Response::Error(503, "game thread did not respond in time");
-            return result->value("ok", false) ? Http::Response::Ok(*result) : Http::Response{ 400, *result };
-        } catch (const std::exception& e) {
-            return Http::Response::Error(503, std::string{ "actor diagnostics failed: " } + e.what());
-        }
-    }
-
     Http::Response ActorMove(const Http::Request& req)
     {
         GameActions::ActorSelector selector;
@@ -315,7 +283,7 @@ void Routes::Register()
     Http::Route("GET", "/ping", Ping);
     Http::Route("GET", "/state", StateRoute);
     Http::Route("GET", "/global", GlobalRead);
-    Http::Route("GET", "/actor/diagnostics", ActorDiagnostics);
+    Http::Route("GET", "/actor/diagnostics", ActorDiagnosticsRoute::Handle);
     Http::Route("POST", "/console", ConsoleCmd);
     Http::Route("POST", "/actor/move-to", ActorMove);
     Http::Route("POST", "/actor/activate", ActorActivate);

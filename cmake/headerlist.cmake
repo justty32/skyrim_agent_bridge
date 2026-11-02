@@ -7,6 +7,9 @@ set(headers ${headers}
     src/Console.h
     src/State.h
     src/StateActors.h
+    src/ActorQueries.h
+    src/ActorDiagnosticsRoute.h
+    src/RouteParsing.h
     src/GameActions.h
     src/MessageBox.h
 )

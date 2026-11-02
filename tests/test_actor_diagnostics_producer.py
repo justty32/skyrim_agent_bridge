@@ -17,18 +17,18 @@ from actor_diagnostics import parse_actor_diagnostics
 
 class ProducerTests(unittest.TestCase):
     def test_real_producer_success_failures_and_contract(self):
-        source = (ROOT / "src/GameActions.cpp").read_text()
+        source = (ROOT / "src/ActorDiagnostics.cpp").read_text()
         start = source.index("json GameActions::ActorDiagnostics(")
-        end = source.index("json GameActions::MoveToActor(", start)
         harness = (ROOT / "tests/actor_diagnostics_harness.cpp").read_text()
-        harness = harness.replace("// PRODUCER_BODY", source[start:end])
-        routes = (ROOT / "src/Routes.cpp").read_text()
-        parser_start = routes.index("    std::optional<RE::FormID> ParseFormID(")
-        parser_end = routes.index("    RE::FormID BodyFormID(", parser_start)
-        harness = harness.replace("// PARSER_BODY", routes[parser_start:parser_end])
-        start = routes.index("    Http::Response ActorDiagnostics(")
-        end = routes.index("    Http::Response ActorMove(", start)
-        harness = harness.replace("// ROUTE_BODY", routes[start:end])
+        harness = harness.replace("// PRODUCER_BODY", source[start:])
+        parser = (ROOT / "src/RouteParsing.h").read_text()
+        parser_start = parser.index("    inline std::optional<RE::FormID> ParseFormID(")
+        parser_end = parser.index("\n}", parser_start)
+        harness = harness.replace("// PARSER_BODY", parser[parser_start:parser_end])
+        routes = (ROOT / "src/ActorDiagnosticsRoute.cpp").read_text()
+        start = routes.index("Http::Response ActorDiagnosticsRoute::Handle(")
+        route_body = routes[start:].replace("ActorDiagnosticsRoute::Handle(", "ActorDiagnostics(", 1)
+        harness = harness.replace("// ROUTE_BODY", route_body)
         include = ROOT / "build/release-clang-cl-linux/vcpkg_installed/x64-windows-skse-clang/include"
         self.assertTrue((include / "nlohmann/json.hpp").is_file(), "existing nlohmann headers required")
         with tempfile.TemporaryDirectory() as directory:

@@ -24,6 +24,7 @@ radius `0.294322 m`、axis `1.118425 m`、total `1.707070 m`；完整 active-lis
 單一 NPC 的雙手裝備／選用法術與 CSTY 診斷已完成 [v1 DLL／Python 接線](docs/actor-diagnostics.md)與隔離 build，2026-11-02 已部署並通過一名同 cell 已載入 NPC 的 live read 驗證。舊 DLL 仍明確回 `unsupported`。
 
 技術文件見 [docs/](docs/README.md)，Linux 工具見 [client/](client/README.md)。
+NPC 原始碼按 actor query／snapshot／HTTP handler 分工；[重構與未部署驗證紀錄](wf/workflows/refactor/actor-diagnostics.md)保留來源界線。
 
 ### Baseline load proof
 
