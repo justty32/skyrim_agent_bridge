@@ -2,7 +2,7 @@
 
 [文件入口](README.md)｜[現役 HTTP API](api.md)
 
-**狀態：DLL producer、GET route 與 v1 capability 已實作並完成離線 Windows x64 build；尚未部署，live QA 尚未執行。**
+**狀態：DLL producer、GET route 與 v1 capability 已實作並完成離線 Windows x64 build；2026-11-02 已部署並通過一名同 cell 已載入 NPC 的 live read 驗證。**
 舊 0.9.0 DLL 的 `/ping` 不含能力，既有 client 仍回 `unsupported`，不呼叫新 route。
 新候選 DLL 以 capability 協商；版本字串不作能力判斷。
 
@@ -70,7 +70,7 @@ known-reference 查找，並不保證 3D／process 可讀。找不到 actor、�
 
 固定依賴版本由 [portfile.cmake](../ports/commonlibsse-ng-fork/portfile.cmake) 的
 `alandtse/CommonLibVR@8593e41c1f780b5b16b227f4f62e574d01e0ac3d` 定義。下列是接線來源，
-尚未證明在本機 load order 的可取得性：
+已在一名同 cell 已載入 NPC 上驗證以下欄位狀態；其餘邊界不由此推廣：
 
 `equipped.right`／`equipped.left` 沿用現有 `State.cpp` 的 `GetEquippedObject(false/true)`，
 是手部持有 form，可能是武器、法術、盾或其他 form；不含護甲清單，也不從空值推成徒手行為。
@@ -120,6 +120,11 @@ python3 -m unittest discover -s tests -v
 
 此測試使用既有 host `g++` 與預設 build 內的 nlohmann headers，不安裝依賴。
 隔離候選 build、PE 與停機部署回退見 [候選驗證紀錄](actor-diagnostics-build.md)。
-下次獲授權並停機部署後，才可做 live QA：指定單一 NPC，對照左右手／法術槽，驗合法空槽、
-不可讀狀態、CSTY base／override、找不到 reference 及 game-thread timeout；保存原始 snapshot
-與觀察。此次未呼叫 HTTP、未設定 NPC、未部署、未啟停遊戲、未碰 profile／DB。
+2026-11-02 部署線已在既存存檔的一名同 cell 已載入 NPC 上驗證 capability、原始 route
+與 strict client，schema 1 成功；右手 `WEAP`、左手 `empty`，selected spells 雙手皆 `SPEL`，
+base CSTY 為 `value`、reference override 為 `empty`。SKSE 載入、`/ping` 與 `/state` 均成功。
+來源與詳細證據範圍見 [候選與 live 紀錄](actor-diagnostics-build.md#live-驗證範圍2026-11-02)。
+
+inactive／persistent unloaded reference、缺 process 的 `unavailable`、實際具有 reference
+CSTY override 的 NPC，以及 live lookup 失敗／timeout／例外，均尚未實機驗證；相關離線測試
+不等於 live 證明。未推斷 effective CSTY、施法行為或任何額外 AI 狀態。

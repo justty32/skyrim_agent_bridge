@@ -11,7 +11,9 @@
 
 ## 最新進度
 
-- [feature-dev] 單一 NPC v1 DLL 候選已完成離線接線／build／測試；待使用者遊戲停機後由部署線接續部署與 live QA，這輪未執行 → [候選紀錄與回退](../docs/actor-diagnostics-build.md)。
+目前沒有可離線續行的 open 工作。單一 NPC v1 接線、隔離 build 與一名同 cell 已載入 NPC
+的 live read 已完成；[已驗／未驗範圍](../docs/actor-diagnostics-build.md#live-驗證範圍2026-11-02)
+由文件承接，後續部署與 runtime 管理由部署線管理。
 
 ## 各工作流 session-log
 

@@ -13,7 +13,7 @@ contract, and a two-sided edit should be one commit.
 | `qa_runner.py` | ✅ semantic paths and baseline manifest/fingerprint gate runtime-verified | Execute a `qa.json`, including fail-closed baseline loading and retryable actor/dialogue/MessageBox steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |
 | `qa_mcp.py` | ✅ 0.3.0 runtime-verified; 0.4.0 MessageBox tool offline-tested; client restart required to discover new tool schemas | MCP server: state, console, actor, dialogue, MessageBox, global, structured wait, and whole-run tools |
 
-`bridge.actor_diagnostics` 與 [actor_diagnostics.py](actor_diagnostics.py) 提供單一 NPC 的版本協商與嚴格離線解析；[v1 契約](../docs/actor-diagnostics.md)尚未接線 DLL，現役 bridge 回 `unsupported`。
+`bridge.actor_diagnostics` 與 [actor_diagnostics.py](actor_diagnostics.py) 提供單一 NPC 的版本協商與嚴格解析；[v1 契約](../docs/actor-diagnostics.md)已完成 DLL 接線，2026-11-02 通過一名同 cell 已載入 NPC 的 route／strict client live 驗證。未宣告能力的舊 DLL 仍回 `unsupported`；[證據與未驗範圍](../docs/actor-diagnostics-build.md#live-驗證範圍2026-11-02)。
 
 stdlib only, no venv.
 

@@ -2,8 +2,9 @@
 
 [契約](actor-diagnostics.md)｜[建置入口](runtime-and-build.md)
 
-2026-11-02 已完成 producer／route／capability 與隔離 build，**未部署，live QA 尚未執行**。
-使用者遊玩期間沒有存取 runtime HTTP、遊戲鎖、GUI、profile、live DLL 或 DB。
+2026-11-02 離線階段完成 producer／route／capability 與隔離 build，當時未部署、未執行 live QA；
+使用者遊玩期間，該離線工作未存取 runtime HTTP、遊戲鎖、GUI、profile、live DLL 或 DB。
+同日後續部署線已完成停機部署與有限 live read 驗證，範圍見下節。
 
 ## 可重現驗證
 
@@ -42,7 +43,23 @@ SHA-256：`aff80463c3de2da61317d4e4416019567e34bdf95b31ece18ea7b72ec3278b3d`。
 source hashes 與 patch 記錄；候選包只含 `SKSE/Plugins/AgentBridge.dll` 和 `SOURCE.json`。
 這不是 Windows CI 或遊戲內驗收證明，不能因 build 成功直接宣稱 live 支援。
 
-## 停機部署與 rollback（本次未執行）
+## Live 驗證範圍（2026-11-02）
+
+來源實作 commit 為 `8f011eb5030bf8ce2f09e4e254899805371e9280`，候選 DLL hash 如上，
+此輪僅更新文件。部署線回報 SKSE `loaded correctly`，`/ping` 宣告
+`capabilities.actor_diagnostics: [1]`，且 `/state` 成功。
+
+既存存檔的一名同 cell 已載入 NPC，原始 route 與 strict client 均成功回 schema 1：
+右手 `value/WEAP`、左手 `empty`；selected spells 雙手均 `value/SPEL`；
+base CSTY 為 `value/CSTY`，reference override 為 `empty`。
+這只證明該已載入 NPC 的唯讀 snapshot 路徑可用，不代表所有 actor／scope 邊界皆已驗。
+
+尚未 live 驗證 inactive／persistent unloaded reference、缺 process 的 `unavailable`、
+具有 reference CSTY override 的 NPC，以及 lookup 失敗／timeout／例外；離線負向測試仍有效，
+但不補作這些 live 證據。未推斷 effective CSTY 或正在施法。
+原始部署／runtime 證據由私人部署工作線保存；本頁僅保留去識別化結果。
+
+## 停機部署與 rollback 操作參考
 
 只有獲授權並確認 Skyrim、SKSE、MO2 已完全停止後，才由部署線操作。先依部署線流程
 依序先取得 desktop lock、再取得 game lock；不要在遊玩中替換載入的 DLL。不要執行預設 build 的 auto-deploy。

@@ -7,7 +7,7 @@
 |---|---|---|
 | `GET /ping` | socket thread | 即使在 load screen 也回應，用來區分「process alive, game busy」與「process dead」。 |
 | `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`。`loaded_actors` 掃描四個 engine process list、去重，並回傳 cell/FormID/3D-loaded 狀態。`player` 與 `game` 永遠存在，其餘 opt-in。`equipped` **只含雙手**，護甲在 `inventory` 顯示為 `worn: true`。暫停或失焦時 task queue 可能不 drain 而回 503；liveness 請用 `/ping`，或以 background-active 模式啟動 client。 |
-| `GET /actor/diagnostics` | game thread | `?form_id=0x01001234&scope=cell&schema_version=1`；單一 NPC 唯讀雙手／selected spells／base 與 reference CSTY；[完整契約](actor-diagnostics.md)。候選 DLL 已離線驗證，未部署／未做 live QA。 |
+| `GET /actor/diagnostics` | game thread | `?form_id=0x01001234&scope=cell&schema_version=1`；單一 NPC 唯讀雙手／selected spells／base 與 reference CSTY；[完整契約](actor-diagnostics.md)。2026-11-02 已部署，通過一名同 cell 已載入 NPC 的 live read；未驗範圍見契約。 |
 | `GET /global` | game thread | `?editor_id=...`；直接讀 live TESGlobal，不解析嘈雜的 console output。 |
 | `POST /console` | game thread | `{"cmd": "...", "ref": "0x14"}`；`ref` 是選用的 console selected reference。Output 僅一行且為 best-effort。 |
 | `POST /actor/move-to` | game thread | `{"name":"Falas Indaryn","scope":"loaded","distance":128}` 或 `{"form_id":"0x02001234"}`；`scope=loaded` 可搜尋 actor process lists 並跨 cell 移動。 |
