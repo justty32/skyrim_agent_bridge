@@ -20,6 +20,6 @@ agent-bridge = **Skyrim SE 的 SKSE plugin（C++，行程內 localhost HTTP serv
 
 ## 專案摘要
 
-C++23 SKSE DLL（CommonLibSSE-NG，clang-cl＋xwin＋vcpkg 交叉編譯）與 stdlib-only Python client 同 repo——port、`/state` 欄位名與讀它的 client 是同一份契約，雙端改動放同一個 commit。測試：`python3 -m unittest discover -s client -p 'test*.py'`（repo 根跑，122 項，不需遊戲）；DLL build 與遊戲內行為驗證見 [testing.md](wf/workflows/testing.md)、[dev-env.md](wf/workflows/dev-env.md)。兄弟 repo `scene-capture-bridge` 是 authoring tool，生命週期相反，不併。
+C++23 SKSE DLL（CommonLibSSE-NG，clang-cl＋xwin＋vcpkg 交叉編譯）與 stdlib-only Python client 同 repo——port、`/state` 欄位名與讀它的 client 是同一份契約，雙端改動放同一個 commit。測試：`python3 -m unittest discover -s client -p 'test*.py'`（repo 根跑，127 項，不需遊戲）；DLL build 與遊戲內行為驗證見 [testing.md](wf/workflows/testing.md)、[dev-env.md](wf/workflows/dev-env.md)。兄弟 repo `scene-capture-bridge` 是 authoring tool，生命週期相反，不併。
 
 <!-- wf-kernel v0.6+368468a (2026-10-26 導入) -->
