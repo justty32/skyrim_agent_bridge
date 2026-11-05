@@ -17,4 +17,4 @@
 | [code-map.md](code-map.md) | 程式碼導航 index：`領域 \| 檔案 \| 職責 \| 測試在哪` ＋ 維護鏈 | dev 包 |
 <!-- wf-insert:COMMON -->
 
-> 過時文檔封存進 `common/archive/`（見 [STRUCTURE](../../STRUCTURE.md)）。
+> 過時文檔直接刪（過時即刪，見 [STRUCTURE](../../STRUCTURE.md) local 段）。

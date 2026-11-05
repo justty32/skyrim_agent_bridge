@@ -28,7 +28,7 @@ md 裡**每列同一組欄位的條列式區塊 > 1 KB**（表格、清單）抽
 - cell 裡的連結兩種寫法都合法：markdown 連結 `[label](rel/path.md#anchor)`、或**裸相對路徑** `rel/path.md`。
 - 一律**相對於資料檔所在目錄**解析（不是相對 `source`、不是相對 repo 根）；`#anchor` 解析時去掉；`http(s):`／`mailto:` 不算。
 - 哪些算連結：所有欄位都掃 `[..](..)`；**連結欄**（`link_columns` 列出的、加上名字結尾 `_path`／`_link` 的）另外把裸值整個當路徑。`link_columns` 沒列就只有後者。
-- 指向 `archive/` 的連結一律不該存在（封存規則見 STRUCTURE）；搬檔時工具不重寫、只列出，由人拿掉。
+- 指向已刪檔的連結一律不該存在（過時即刪，見 STRUCTURE local 段）；搬檔時工具不重寫、只列出，由人拿掉。
 - **json 內跨兩層以上的路徑可用代號**：值寫成 `{"$fmt": "${gitRoot}/docs/x.md#錨"}`，讀取時展開；變數集合、展開規則與工具行為見 [data-files-fmt](data-files-fmt.md)。md 連結與 `.csv` 不用代號。
 
 ## md 端留什麼

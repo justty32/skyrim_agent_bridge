@@ -29,7 +29,7 @@
 | 觸發（你說…）| 工作流 | 入口檔 |
 |--------------|--------|--------|
 | 「記 / 查踩坑」 | **gotchas** | [workflows/common/gotchas.md](workflows/common/gotchas.md) |
-| 「整理 X」「封存過時的」「檔案太多／太雜」「太大要拆」「只留結論」 | **tidy** | [workflows/tidy/README.md](workflows/tidy/README.md) |
+| 「整理 X」「刪過時的」「檔案太多／太雜」「太大要拆」「只留結論」 | **tidy** | [workflows/tidy/README.md](workflows/tidy/README.md) |
 | 「記個想法」「以後要做」「排進 roadmap」「幫我規劃」 | **planning** | [workflows/planning.md](workflows/planning.md) |
 | 「記個決定」「為什麼選 A 不選 B」 | **decisions** | [workflows/decisions.md](workflows/decisions.md) |
 | 「我的偏好是…」「以後直接做 / 先問」 | **user** | [workflows/common/user.md](workflows/common/user.md) |

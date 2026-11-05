@@ -34,7 +34,6 @@
 | `landed/`（長出來才建）| 已落地功能目錄：功能在哪、實作細節指標 |
 | `gotchas.md`（長出來才建）| 本工作流專屬踩坑（共通的在 [common/gotchas](../common/gotchas.md)）|
 | `session-log.md`（長出來才建）| 本工作流 open 進度（hub 在 [SESSION-LOG](../../SESSION-LOG.md)）|
-| `archive/`（長出來才建）| 過時文檔封存（規則見 [STRUCTURE](../../STRUCTURE.md)）|
 
 
 ## 交接
