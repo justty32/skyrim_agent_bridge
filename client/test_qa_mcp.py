@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -10,6 +11,54 @@ import qa_mcp
 
 
 class SemanticToolTests(unittest.TestCase):
+    @patch("qa_mcp.bridge.input_tap")
+    def test_input_tap_routes_once_and_preserves_dispatch_result(self, tap):
+        expected = {"ok": True, "schema": 1, "request_id": 17, "state": "completed",
+                    "down_dispatched": True, "up_dispatched": True, "effect": "unknown"}
+        tap.return_value = expected
+        result = qa_mcp.tool_qa_input_tap({"scan_code": 18, "timeout": 2.5})
+        self.assertEqual(result, expected)
+        tap.assert_called_once_with(18, timeout=2.5)
+
+    @patch("qa_mcp.bridge.input_tap")
+    def test_input_tap_defaults_timeout(self, tap):
+        tap.return_value = {"ok": True}
+        qa_mcp.tool_qa_input_tap({"scan_code": 254})
+        tap.assert_called_once_with(254, timeout=3.0)
+
+    @patch("qa_mcp.bridge.input_tap")
+    def test_input_tap_rejects_invalid_arguments_without_sending(self, tap):
+        cases = [{"scan_code": scan} for scan in (None, True, False, 0, -1, 255, 256, 18.0, "18")]
+        cases += [{"scan_code": 18, "timeout": timeout}
+                  for timeout in (None, True, False, 0, -1, float("nan"), float("inf"), "3", 10**1000)]
+        cases += [{}, {"scan_code": 18, "retry_for": 10}, {"scan_code": 18, "action": "tap"}, []]
+        for args in cases:
+            with self.subTest(args=args), self.assertRaises(qa_mcp.ToolError):
+                qa_mcp.tool_qa_input_tap(args)
+        tap.assert_not_called()
+
+    @patch("qa_mcp.bridge.input_tap")
+    def test_input_tap_unknown_error_retains_full_json_without_retry(self, tap):
+        expected = {"ok": False, "schema": 1, "request_id": 19, "state": "unknown",
+                    "reason": "deadline", "down_dispatched": True, "up_dispatched": False,
+                    "effect": "unknown"}
+        tap.return_value = expected
+        with patch("qa_mcp.qa_runner.retry_for_ok") as retry:
+            result = qa_mcp.handle_tools_call({"name": "qa_input_tap", "arguments": {"scan_code": 18}})
+        self.assertTrue(result["isError"])
+        self.assertEqual(json.loads(result["content"][0]["text"]), expected)
+        tap.assert_called_once_with(18, timeout=3.0)
+        retry.assert_not_called()
+
+    def test_input_tap_schema_matches_strict_dispatch_contract(self):
+        tool = next(tool for tool in qa_mcp.TOOLS if tool["name"] == "qa_input_tap")
+        schema = tool["inputSchema"]
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(schema["required"], ["scan_code"])
+        self.assertEqual(schema["properties"]["scan_code"], {"type": "integer", "minimum": 1, "maximum": 254})
+        self.assertIn("completed", tool["description"])
+        self.assertIn("unknown", tool["description"])
+
     @patch("qa_mcp.bridge.select_message_box")
     def test_message_box_routes_index_and_guard(self, select):
         select.return_value = {"ok": True}

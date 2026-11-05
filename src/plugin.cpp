@@ -4,6 +4,7 @@
 #include "Routes.h"
 #include "State.h"
 #include "Screenshot.h"
+#include "Input.h"
 
 namespace {
     // Fixed for now. If it ever needs to move, it moves to an ini — but the
@@ -31,6 +32,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
         // Started at kDataLoaded, not at plugin load: /state needs the game's
         // singletons to exist, and a bridge that answers before they do would
         // just hand the runner garbage.
+        if (!Input::Start()) SKSE::log::warn("AgentBridge: native keyboard input unavailable");
         Routes::Register();
         if (!Http::Start(kPort)) {
             SKSE::log::error("AgentBridge: server did not start — QA loop is blind this session");
@@ -59,6 +61,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse)
     SKSE::Init(skse);
     SetupLog();
     SKSE::log::info("AgentBridge loaded");
+    if (!Input::Install()) SKSE::log::warn("AgentBridge: native keyboard hook unavailable");
     if (!Screenshot::Install()) {
         SKSE::log::warn("AgentBridge: screenshot render hook unavailable; capture returns 503");
     }

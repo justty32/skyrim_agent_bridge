@@ -14,4 +14,7 @@ set(sources ${sources}
     src/ActorDiagnosticsRoute.cpp
     src/GameActions.cpp
     src/MessageBox.cpp
+    src/Input.cpp
+    src/InputCore.cpp
+    src/InputRoute.cpp
 )

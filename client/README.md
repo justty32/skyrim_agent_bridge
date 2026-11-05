@@ -8,6 +8,7 @@ contract, and a two-sided edit should be one commit.
 | Tool | Status | What it does |
 |---|---|---|
 | `mo2ctl.py` | ✅ verified end-to-end; `launch` uses the deployment script | Drive MO2 without its GUI: install / uninstall / enable / disable / launch / kill / status |
+| `input.py` | 0.11.0離線候選 | 單次原生keyboard tap、能力協商與unknown不重試；`bridge.input_tap`；[契約](../docs/input.md) |
 | `screenshot.py` | 離線候選 | stdlib binary BMP 驗證與存檔；`python3 -B client/screenshot.py /tmp/new-frame.bmp`；[契約](../docs/screenshot.md) |
 | `bridge.py` | ✅ | Talking to the in-game HTTP bridge. Owns the port; everything else imports it |
 | `actor_value_probe.py` | ✅ offline-tested | Strict `getav` reader: exact engine output shape plus repeated identical reads for a chosen runtime reference |

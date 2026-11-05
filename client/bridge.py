@@ -20,6 +20,7 @@ import urllib.request
 
 from actor_diagnostics import query_actor_diagnostics
 from screenshot import capture as _capture_screenshot
+from input import tap as _tap_input
 
 BASE_URL = "http://127.0.0.1:5099"
 
@@ -249,3 +250,8 @@ def actor_value(name: str, ref: str, *, consecutive: int = 3,
 def screenshot(*, timeout: float = 5.0) -> dict:
     """Capture owned BMP bytes plus frame metadata, or return an error dict."""
     return _capture_screenshot(BASE_URL, timeout=timeout)
+
+
+def input_tap(scan_code: int, *, timeout: float = 3.0) -> dict:
+    """One native keyboard tap; never retry an unknown result."""
+    return _tap_input(BASE_URL, scan_code, timeout=timeout)

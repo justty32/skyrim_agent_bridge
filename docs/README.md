@@ -2,6 +2,7 @@
 
 [專案入口](../README.md)
 
+- [原生 keyboard tap v1 候選](input.md)：native input phase、release debt、嚴格 client 與未驗界線。
 - [截圖 v1 候選](screenshot.md)：binary BMP、client、render phase 與未驗界線。
 - [HTTP API 與 runtime 契約](api.md)：route、baseline load proof、MessageBox 與 actor。
 - [單一 NPC 唯讀診斷 v1](actor-diagnostics.md)：DLL 唯讀接線、Python 協商／解析與離線驗證。

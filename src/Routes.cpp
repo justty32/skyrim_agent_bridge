@@ -1,4 +1,6 @@
 #include "Routes.h"
+#include "Input.h"
+#include "InputRoute.h"
 
 #include "ActorDiagnosticsRoute.h"
 #include "RouteParsing.h"
@@ -73,7 +75,7 @@ namespace {
             { "ok", true },
             { "plugin", "AgentBridge" },
             { "version", AGENT_BRIDGE_VERSION },
-            { "capabilities", { { "actor_diagnostics", json::array({ 1 }) }, { "screenshot", json::array({ 1 }) } } },
+            { "capabilities", { { "actor_diagnostics", json::array({ 1 }) }, { "screenshot", json::array({ 1 }) }, { "input", json::array({ 1 }) } } },
         });
     }
 
@@ -302,9 +304,10 @@ namespace {
 
 void Routes::Register()
 {
-    Http::OnStop(Screenshot::Stop);
+    Http::OnStop([] { Input::Stop(); Screenshot::Stop(); });
     Http::Route("GET", "/ping", Ping);
     Http::Route("POST", "/screenshot", ScreenshotRoute);
+    Http::Route("POST", "/input", InputRoute::Handle);
     Http::Route("GET", "/state", StateRoute);
     Http::Route("GET", "/global", GlobalRead);
     Http::Route("GET", "/actor/diagnostics", ActorDiagnosticsRoute::Handle);

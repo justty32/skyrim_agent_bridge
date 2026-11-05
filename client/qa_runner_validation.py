@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 
 from qa_runner_baseline import (  # noqa: F401
     preflight_baseline,
@@ -25,9 +26,25 @@ from qa_runner_conditions import (  # noqa: F401
 KNOWN_TYPES = {"install", "uninstall", "enable", "disable", "launch", "kill",
                "load_baseline", "console", "wait", "assert_state", "assert_global",
                "move_to_actor", "activate_actor", "select_dialogue", "close_dialogue",
-               "select_message_box",
+               "select_message_box", "input_tap",
                "handoff_user"}
 
+
+
+def input_tap_error(step: dict) -> str | None:
+    if set(step) - {"type", "scan_code", "timeout", "label"}:
+        return "input_tap accepts only type, scan_code, timeout, label; retries are forbidden"
+    scan = step.get("scan_code")
+    if type(scan) is not int or not 1 <= scan <= 254:
+        return "input_tap scan_code must be an integer from 1 through 254"
+    timeout = step.get("timeout", 3.0)
+    try:
+        valid_timeout = type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0
+    except (OverflowError, TypeError):
+        valid_timeout = False
+    if not valid_timeout:
+        return "input_tap timeout must be finite and positive"
+    return None
 
 def validate(spec: dict, base_dir: Path) -> list[str]:
     """Catch everything checkable without touching MO2 or the game.
@@ -61,6 +78,10 @@ def validate(spec: dict, base_dir: Path) -> list[str]:
                         problems.append(f"{where}: source not found: {path}")
             if kind in ("uninstall", "enable", "disable") and not step.get("mod_name"):
                 problems.append(f"{where}: {kind} needs `mod_name`")
+            if kind == "input_tap":
+                error = input_tap_error(step)
+                if error:
+                    problems.append(f"{where}: {error}")
             if kind == "console" and not step.get("cmd"):
                 problems.append(f"{where}: console needs `cmd`")
             if kind in ("move_to_actor", "activate_actor"):

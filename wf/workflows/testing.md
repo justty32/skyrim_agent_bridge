@@ -76,3 +76,24 @@ env -u SKYRIM_FOLDER -u SKYRIM_MODS_FOLDER cmake --build "$out/build" -j 2
 ```
 
 實機五項行為與未驗界線見 [截圖候選](../../docs/screenshot.md)。
+
+## 原生 keyboard tap 候選離線驗證
+
+0.11.0未部署；API／primary／runtime邊界見[契約](../../docs/input.md)。
+repo根執行；沿用上節的既有installed dependencies與隔離build命令，禁止auto-deploy。
+
+```sh
+out=/var/tmp/skyrim-agent-bridge-input-2026-11-05
+c++ -std=c++20 -pthread -Wall -Wextra -Werror -Isrc src/InputCore.cpp tests/native/input_core.cpp -o "$out/input-core-test"
+"$out/input-core-test"
+"$out/input-core-test" --mutate
+c++ -std=c++23 -Wno-deprecated-literal-operator -pthread -DAGENT_BRIDGE_HTTP_HOST_TEST -Isrc -Ibuild/release-clang-cl-linux/vcpkg_installed/x64-windows-skse-clang/include src/HttpServer.cpp src/InputRoute.cpp src/InputCore.cpp tests/http/input_loopback.cpp -o "$out/input-http-host"
+"$out/input-http-host"
+"$out/input-http-host" --mutate
+python3 -B -m unittest discover -s client -p 'test*.py'
+```
+
+兩個 `--mutate` 都應exit1；native host執行production queue/state machine與cache seam，
+HTTP host經真loopback到production transport/handler/core。host環境與keyboard poll是可控替身，
+不能取代真engine mapping、vtable phase、menu/focus或遊戲效果驗證；production Ping由DLL build
+與接線檢查承接，HTTP host的Ping只用於transport smoke。既有三個截圖host與HTTP回歸仍須綠。

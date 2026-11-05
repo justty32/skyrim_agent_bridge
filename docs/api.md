@@ -5,6 +5,7 @@
 <!-- wf-nav -->
 | Route | Runs on | Notes |
 |---|---|---|
+| `POST /input` | native input phase／socket thread | 0.11.0未部署候選；單一keyboard tap，嚴格schema、bounded wait與release debt；[契約](input.md)。 |
 | `POST /screenshot` | render callback／socket thread | 0.10.0 離線候選；空 body／`{}` → binary BMP，失敗 JSON 503；[契約](screenshot.md)。 |
 | `GET /ping` | socket thread | 即使在 load screen 也回應，用來區分「process alive, game busy」與「process dead」。 |
 | `GET /state` | game thread | `?include=nearby_actors,cell_actors,loaded_actors,inventory,quests,plugins&radius=&limit=`。`loaded_actors` 掃描四個 engine process list、去重，並回傳 cell/FormID/3D-loaded 狀態。`player` 與 `game` 永遠存在，其餘 opt-in。`equipped` **只含雙手**，護甲在 `inventory` 顯示為 `worn: true`。暫停或失焦時 task queue 可能不 drain 而回 503；liveness 請用 `/ping`，或以 background-active 模式啟動 client。 |
@@ -20,6 +21,7 @@
 診斷 handler 位於 `src/ActorDiagnosticsRoute.cpp`，`Routes::Register` 維持相同的 GET route；
 此 source 分拆不改契約、game-thread task 或 timeout。
 
+`/ping` 在0.11.0候選宣告 `capabilities.input: [1]`，只代表支援schema，不代表hook可用或runtime效果已驗。
 `/ping` 在 0.10.0 候選另宣告 `capabilities.screenshot: [1]`（不代表 runtime 已驗）。
 `/ping` 在新候選 DLL 宣告 `capabilities.actor_diagnostics: [1]`；舊 DLL 不宣告時 client 保留 `unsupported`。
 

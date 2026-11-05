@@ -50,7 +50,7 @@ from qa_runner_report import (  # noqa: F401
     MARK, render,
 )
 from qa_runner_validation import (  # noqa: F401
-    KNOWN_TYPES, validate,
+    KNOWN_TYPES, validate, input_tap_error,
 )
 
 
@@ -194,6 +194,15 @@ class Runner:
             },
             "state_fingerprint": fingerprint,
         }
+
+    def step_input_tap(self, step) -> dict:
+        error = input_tap_error(step)
+        if error:
+            raise StepFailed(error)
+        result = bridge.input_tap(step["scan_code"], timeout=step.get("timeout", 3.0))
+        if not result.get("ok"):
+            raise StepFailed("input tap failed; do not retry: " + json.dumps(result), [result])
+        return result
 
     def step_console(self, step) -> dict:
         result = bridge.console(require(step, "cmd"), step.get("ref"),
@@ -368,7 +377,7 @@ class Runner:
                 continue
             outcome = self._run_one(index, step)
             results.append(outcome)
-            if outcome["status"] == FAIL and not step.get("continue_on_fail"):
+            if outcome["status"] == FAIL and (step.get("type") == "input_tap" or not step.get("continue_on_fail")):
                 stop_at = index
 
         # Teardown always runs. The whole point of a repeatable loop is that a

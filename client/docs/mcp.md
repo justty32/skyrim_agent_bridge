@@ -20,12 +20,19 @@ startup, so registering it mid-session does nothing for that session.
 | `qa_status` | is the game up, is the profile safe to edit |
 | `qa_state` | the `/state` snapshot — what assertions are written against |
 | `qa_console` | run a console command |
+| `qa_input_tap` | 單次原生 keyboard tap：`scan_code` 1..254，選填有限正數 `timeout`（預設 3 秒）；不重試 |
 | `qa_actor` | move beside or start dialogue with an actor selected by name/runtime FormID and cell/loaded scope |
 | `qa_dialogue` | select a visible dialogue option by text/index/TopicInfo FormID, or close dialogue |
 | `qa_message_box` | select a visible modal button by text/index, optionally guarded by exact message text |
 | `qa_global` | read a TESGlobal by EditorID |
 | `qa_wait` | poll JSON-path conditions until asynchronous game state converges |
 | `qa_run` | execute a qa.json, return the report |
+
+`qa_input_tap` 目前是**未部署候選**，需 DLL 的 `input: [1]` 能力；既有 0.10.0 不送鍵。
+例如 `{"scan_code":18,"timeout":3}`。`completed` 只證實 down/up 原生派送完成，
+`effect` 仍為 `unknown`；若 `state=unknown`，可能已送鍵，**不可重送**。
+錯誤結果保留完整 JSON（含 request ID 與 down/up flags）。更新後需重啟 MCP server／開新 session
+才能重新發現這個工具；本輪未改註冊或部署。
 
 **What is deliberately not exposed: `install`, `uninstall`, `launch`, `kill`.** Each is one
 Bash call, they happen a handful of times per session, and the chatty calls — the ones

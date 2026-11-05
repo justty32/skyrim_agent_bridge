@@ -9,6 +9,7 @@
 <!-- wf-nav -->
 | 領域 | 檔案 | 職責 | 測試在哪 |
 |------|------|------|---------|
+| 原生按鍵 | `src/Input.*`、`src/InputCore.*`、`src/InputDispatch.h`、`src/InputRoute.*`、[input.py](../../../client/input.py) | keyboard Process前鏈、原生cache、三phase tap／release debt、HTTP schema與單次client | `tests/native/input_core.cpp`、`tests/http/input_loopback.cpp`、`client/test_input.py` |
 | 截圖 | `src/Screenshot.*`、`src/ScreenshotCore.*`、`src/ScreenshotReadback.*`、`src/ScreenshotHook.cpp`、`src/ScreenshotHookCore.h`、[screenshot.py](../../../client/screenshot.py) | render callsite 鏈、D3D readback、bounded request、BMP encoder、binary client／存檔 | `tests/native/`、`client/test_screenshot.py` |
 | HTTP／路由 | `src/HttpServer.*`、`src/Routes.*`、`src/ActorDiagnosticsRoute.*`、`src/RouteParsing.h`、`src/GameThread.h` | 手寫 HTTP（loopback 5099）、route 分派、marshal 到 game thread | `tests/http/loopback.cpp`、client 測試與遊戲內驗證 |
 | 遊戲狀態 | `src/State*.cpp`、`src/GameActions.*`、`src/ActorQueries.*`、`src/Console.*`、`src/MessageBox.*` | `/state`、actor 移動／啟動、console、結構化 MessageBox／dialogue | `client/test_bridge.py`（client 側契約） |

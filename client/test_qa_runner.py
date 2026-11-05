@@ -84,6 +84,41 @@ class FakeTime:
         self.now += seconds
 
 
+class InputTapTests(unittest.TestCase):
+    def runner(self, steps):
+        return qa_runner.Runner({"steps": steps}, Path("."), interactive=False)
+
+    @patch("qa_runner.bridge.input_tap")
+    def test_completed_once(self, tap):
+        tap.return_value = {"ok": True, "state": "completed", "effect": "unknown"}
+        result = self.runner([]).step_input_tap({"type": "input_tap", "scan_code": 18})
+        self.assertEqual(result["effect"], "unknown")
+        tap.assert_called_once_with(18, timeout=3.0)
+
+    @patch("qa_runner.bridge.input_tap")
+    def test_unknown_stops_without_retry_and_preserves_receipt(self, tap):
+        tap.return_value = {"ok": False, "state": "unknown", "request_id": 42,
+                            "down_dispatched": True, "up_dispatched": False}
+        result = self.runner([{"type": "input_tap", "scan_code": 18},
+                              {"type": "console", "cmd": "must not run"}]).run()
+        tap.assert_called_once()
+        self.assertEqual(result["steps"][1]["status"], "skipped")
+        self.assertEqual(result["steps"][0]["failures"][0]["request_id"], 42)
+
+    @patch("qa_runner.bridge.input_tap")
+    def test_strict_invalid_never_dispatches(self, tap):
+        cases = [{"scan_code": x} for x in (True, 0, 255, 1.5, "18")] + [
+            {"scan_code": 18, "timeout": x} for x in (True, -1, float("nan"), float("inf"), 10**1000)] + [
+            {"scan_code": 18, "retry_for": 1}, {"scan_code": 18, "continue_on_fail": True}]
+        for fields in cases:
+            step = {"type": "input_tap", **fields}
+            with self.subTest(step=step):
+                self.assertTrue(qa_runner.validate({"steps": [step]}, Path(".")))
+                with self.assertRaises(qa_runner.StepFailed):
+                    self.runner([]).step_input_tap(step)
+        tap.assert_not_called()
+
+
 class BaselineLoadTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()

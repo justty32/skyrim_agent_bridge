@@ -41,6 +41,7 @@ Any step accepts `label` (what shows in the report), `comment` (ignored, for hum
 | `launch` | `wait`, `shortcut`, `background_active` | starts SKSE through MO2; waits for the bridge **and** the game thread; `background_active` defaults true and is restored by `kill` |
 | `kill` | `mo2`, `timeout` | `mo2: true` also closes MO2, which is what makes the profile writable |
 | `load_baseline` | `save`, `retry_for`, `retry_interval`, `timeout`, `state_timeout` | preflights top-level `baseline.manifest`, loads its stem, then polls its state fingerprint; optional `save` must equal the manifest stem |
+| `input_tap` | `scan_code`, `timeout`, `label` | 0.11.0未部署候選；單次原生keyboard tap，無retry/continue_on_fail；completed只證派送，效果unknown；[契約](../docs/input.md) |
 | `console` | `cmd`, `ref`, `settle`, `timeout` | `ref` is the console's selected reference, for dotted commands |
 | `move_to_actor` | `name` or `form_id`, `scope`, `distance`, `retry_for`, `retry_interval`, `settle`, `timeout` | move beside an actor; `scope` is `cell` (default) or `loaded`, distance defaults to 128; may cross cells |
 | `activate_actor` | `name` or `form_id`, `scope`, `retry_for`, `retry_interval`, `settle`, `timeout` | start normal dialogue after the actor is loaded in the current cell |
@@ -275,3 +276,7 @@ Validation is eager — `--dry-run` checks step types, required fields, operator
 path syntax and that every `install` source exists, without touching MO2 or the game.
 Worth running first: the expensive part of a real run is a game launch, and discovering
 a typo at step 12 wastes all of it.
+
+`{"type":"input_tap","scan_code":18,"timeout":3}` 僅接受1–254的整數keyboard code。
+先協商能力，unknown／任何失敗停止主steps並保留request receipt，既有teardown仍照跑，不自動重送；
+須另用assert_state／截圖觀察效果。此候選本輪未在遊戲送鍵。

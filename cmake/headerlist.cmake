@@ -16,4 +16,8 @@ set(headers ${headers}
     src/RouteParsing.h
     src/GameActions.h
     src/MessageBox.h
+    src/Input.h
+    src/InputCore.h
+    src/InputDispatch.h
+    src/InputRoute.h
 )

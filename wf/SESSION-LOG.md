@@ -11,7 +11,7 @@
 
 ## 最新進度
 
-- [feature-dev] 使用者11-05裁示的`/input`尚未實作；下一切片先核單鍵tap的原生dispatch／所有權。截圖0.10.0已部署並完成有限live，補充實機邊界由母repo WAIT承接，見[契約](../docs/screenshot.md)。
+目前無在途source工作；`/input` 0.11.0已完成離線候選，實機待驗由母repo WAIT承接，見[契約](../docs/input.md)。截圖0.10.0有限live及補充邊界見[截圖契約](../docs/screenshot.md)。
 
 NPC source 分拆與隔離驗證由
 [重構紀錄](workflows/refactor/actor-diagnostics.md)承接；現役 DLL 與有限 live 範圍仍見

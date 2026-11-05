@@ -3,7 +3,7 @@
 這個 SKSE plugin 在 Skyrim 行程內開啟 localhost HTTP server，讓 Linux 端 agent 讀取結構化
 遊戲狀態、執行 console、尋找與移動 actor、操作對話，不碰 OS 輸入。
 0.10.0 加入遊戲 backbuffer [截圖功能](docs/screenshot.md)，已完成一次有限實機驗證。它回本次 request 之後 copy 的畫面；同尺寸重建不保證取消，
-`X-Screenshot-Frame` 是 render callback 識別，不是 Present counter。`POST /input` 尚未實作。
+`X-Screenshot-Frame` 是 render callback 識別，不是 Present counter。0.11.0 提供原生 keyboard tap 的[離線候選](docs/input.md)，未部署／未送鍵實機驗證。
 
 ## 定位與邊界
 

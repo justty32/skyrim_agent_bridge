@@ -3,11 +3,12 @@
 
 Phase 2.2. Registered alongside houseCARL in ~/.claude.json.
 
-Nine tools, chosen by how often they get called rather than by what exists:
+Ten tools, chosen by how often they get called rather than by what exists:
 
   qa_status   is the game up, is the profile safe to edit
   qa_state    the /state snapshot — the thing assertions are written against
   qa_console  run a console command
+  qa_input_tap dispatch one native keyboard tap without retry
   qa_actor    locate/move to/start dialogue with an actor by name or FormID
   qa_dialogue select or close structured dialogue
   qa_message_box select a guarded modal button
@@ -29,6 +30,7 @@ diagnostics go to stderr. stdlib only, matching the rest of client/.
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 import traceback
@@ -42,7 +44,7 @@ import mo2ctl
 import qa_runner
 
 SERVER_NAME = "skyrim-qa"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 INCLUDE_VALUES = ["nearby_actors", "cell_actors", "loaded_actors", "inventory", "quests", "plugins"]
@@ -102,6 +104,24 @@ TOOLS = [
                         "description": "Optional selected reference FormID (hex like '0x14' or decimal), for dotted commands."},
             },
             "required": ["cmd"],
+        },
+    },
+    {
+        "name": "qa_input_tap",
+        "description": (
+            "派送一次原生 keyboard tap（down/up），不重試。scan_code 是已綁定遊戲動作的 DIK code。"
+            "completed 只證實原生 dispatch 完成，effect 仍為 unknown；state=unknown 可能已送鍵，禁止重送。"
+            "目前為未部署候選，需支援 input v1 的 DLL；能力不足不會送鍵。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "scan_code": {"type": "integer", "minimum": 1, "maximum": 254},
+                "timeout": {"type": "number", "exclusiveMinimum": 0,
+                            "description": "能力協商與派送共用的總秒數；須有限且大於 0，預設 3。"},
+            },
+            "required": ["scan_code"],
+            "additionalProperties": False,
         },
     },
     {
@@ -272,6 +292,28 @@ def tool_qa_console(args: dict) -> dict:
     return result
 
 
+def tool_qa_input_tap(args: dict) -> dict:
+    if not isinstance(args, dict) or set(args) - {"scan_code", "timeout"}:
+        raise ToolError("input tap accepts only `scan_code` and `timeout`")
+    scan_code = args.get("scan_code")
+    if type(scan_code) is not int or not 1 <= scan_code <= 254:
+        raise ToolError("`scan_code` must be an integer from 1 through 254")
+    timeout = args.get("timeout", 3.0)
+    try:
+        valid_timeout = type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0
+    except OverflowError:
+        valid_timeout = False
+    if not valid_timeout:
+        raise ToolError("`timeout` must be finite and positive")
+    # Input may already have reached the engine when the response is lost.
+    # Keep this direct, single call outside every retry helper.
+    result = bridge.input_tap(scan_code, timeout=timeout)
+    if not result.get("ok"):
+        # Preserve identity and dispatch flags even in the MCP isError envelope.
+        raise ToolError(json.dumps(result, ensure_ascii=False))
+    return result
+
+
 def tool_qa_actor(args: dict) -> dict:
     action, name, form_id = args.get("action"), args.get("name"), args.get("form_id")
     if (name is None) == (form_id is None):
@@ -413,6 +455,7 @@ HANDLERS = {
     "qa_status": tool_qa_status,
     "qa_state": tool_qa_state,
     "qa_console": tool_qa_console,
+    "qa_input_tap": tool_qa_input_tap,
     "qa_actor": tool_qa_actor,
     "qa_dialogue": tool_qa_dialogue,
     "qa_message_box": tool_qa_message_box,

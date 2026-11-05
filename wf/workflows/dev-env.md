@@ -23,7 +23,7 @@
 
 | 做什麼 | 指令 | 備註 |
 |--------|------|------|
-| client 離線測試 | `python3 -m unittest discover -s client -p 'test*.py'` | repo 根跑；138 項；不需遊戲 |
+| client 離線測試 | `python3 -m unittest discover -s client -p 'test*.py'` | repo 根跑；161 項；不需遊戲 |
 | build DLL | `export VCPKG_ROOT="$HOME/dev/vcpkg" && cmake --fresh --preset build-release-clang-cl-linux && cmake --build build/release-clang-cl-linux` | 產出 `build/release-clang-cl-linux/AgentBridge.dll`；`--fresh` 不可省 |
 | 自動部署（選用） | configure 前設 `SKYRIM_MODS_FOLDER`（MO2 `mods/`）或 `SKYRIM_FOLDER` | post-build 把 DLL 放進 `SKSE/Plugins/`；就地覆寫執行中的 DLL 會讓遊戲無聲暴斃，見母 repo dev-env 的部署段 |
 | 遊戲內存活檢查 | `curl -s 127.0.0.1:5099/ping` | 需遊戲在跑；遊戲是獨佔資源，走 agentctl 的 game lock |
