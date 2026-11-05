@@ -1,4 +1,4 @@
-# 原生 keyboard tap v1 候選（0.11.0，未部署）
+# 原生 keyboard tap v1（0.11.0，已部署、首次 tap 被 guard 取消）
 
 [文件入口](README.md)｜[API](api.md)｜[驗證命令](../wf/workflows/testing.md)
 
@@ -12,7 +12,7 @@ client 先查 `/ping.capabilities.input: [1]`，舊 DLL 回 `unsupported` 而不
 Python 呼叫 `bridge.input_tap(18)`；獨立 CLI：`python3 -B client/input.py --scan-code 18`。
 既有QA入口提供MCP `qa_input_tap`及qa.json `input_tap` step；二者單次派送，失敗即停止，
 不進semantic retry；request receipt保留以供判讀。MCP server重啟後才會發現新tool。
-上述是未部署候選的使用說明，本輪沒有對目前0.10.0送鍵或讀 runtime HTTP。
+以上是API用法；2026-11-05稍晚已備份0.10.0並部署0.11.0，唯一一次live tap被guard取消，詳見下節。
 
 ## 派送、生命週期與來源
 
@@ -61,9 +61,34 @@ client 永遠回 `effect: unknown`；POST開始後的失聯、格式錯誤、dea
 來源的release語義不交錯。驗收應獨佔輸入。其他mod吞事件、disabled controls、遊戲上下文
 改變都可能令完整派送沒有預期效果，必須以後續狀態／畫面觀察驗證。
 
+## 2026-11-05有限實機結果
+
+0.11.0已停機備份後部署；來源commit `edc8d87`，DLL SHA256
+`d0e93e5e8be6d1bdd4921a272e516bc61e3a50cd811f03c8414941ee0e51733c`。
+22:21，使用者已進 `DLC2SVGreathall`、load epoch 1，交出控制並切回遊戲等待約5秒後，
+唯一一次 `input_tap(scan_code=57)` 回HTTP503、`state: cancelled`、
+`reason: environment_blocked`、down/up flags均false。當時目視為正常HUD／常駐overlay。
+此結果只證guard拒絕了這次request；沒有down/up派送證據，跳躍與其他遊戲效果均未驗成。
+本輪於此停止POST，沒有放寬guard、改code或重部署。
+
+依 `src/InputCore.cpp` 的 `Service::Tick` 順序，這個reason證該次已進native Tick，
+且mapping guard已通過，接著environment.allowed為false，在送down前取消；
+physical-key與cache-capacity guards排在allowed之後，不能從這次結果判定它們是否成立。
+`src/Input.cpp` 的Keyboard Probe把snapshot epoch、menuAllowed、snapshot age<250ms、
+非空cached HWND及foreground相符等合成單一bool，末尾再核epoch。
+因此無法從回應區分UI flags／暫停／特定menu、snapshot過期、epoch失配或foreground不符；
+正常HUD畫面及等待5秒亦不能證明這些內部條件全部通過。UI snapshot目前保守拒絕任何
+UsesMenuContext／UsesCursor／Modal menu，常駐overlay是否命中仍未知。
+
+後續最小診斷方向是在既有結果中細分blocked reason並保存該次Probe的bounded證據：
+UI snapshot時列出命中的menu名稱／flags、pause/application/item/modal／closing狀態；
+input phase記snapshot age、snapshot／validated／current epoch、cached-window存在與foreground是否相符。
+證據須沿既有game-task snapshot／atomic ownership傳遞，不在HTTP或input thread重讀UI容器。
+先只診斷、保留guard與單次不重送語義；有新授權才新增診斷code或重跑live，不直接豁免HUD／overlay。
+
 ## 待實機驗證
 
-0.11.0只有離線host／client及matching Windows x64 build，未部署。停機部署且取得game授權後，
+離線host／client與matching Windows x64 build已完成；live目前只得到一次guard取消。後續取得授權並定位guard原因後，
 先用已綁定的非破壞鍵驗down/up與一個可觀察效果，再核menu／失焦／loading拒絕、實體鍵衝突、
 關閉與重新載入時release debt，最後重跑0.10.0截圖回歸。另一個允許的runtime亦須獨立實機核對；
 不因host綠燈認為遊戲效果、Wine/DXVK/其他input hook相容性或無stuck key已驗。
