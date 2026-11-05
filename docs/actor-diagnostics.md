@@ -112,15 +112,7 @@ snapshot，socket thread 不保存 actor pointer。`currentProcess` 缺席時，
 `selectedSpells` 本身位於 actor runtime，此 guard 是保守讀值策略，未聲稱陣列一定不可讀。
 未預期例外／zero FormID／不合法 signature 使整體查詢失敗。
 
-新增的 host test 以 RE doubles 執行原始 producer 函式，並把實際輸出交既有 Python parser，
-涵蓋 value／empty／unavailable、左右獨立、CSTY 兩層、lookup／base／metadata 失敗與缺欄位；
-不是 engine 行為測試。真 CommonLib 型別由 Windows build 驗證：
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-此測試使用既有 host `g++` 與預設 build 內的 nlohmann headers，不安裝依賴。
+真 CommonLib 型別由 Windows build 驗證。
 隔離候選 build、PE 與停機部署回退見 [候選驗證紀錄](actor-diagnostics-build.md)。
 後續 source 分拆僅離線驗證、未重新部署；[重構紀錄](../wf/workflows/refactor/actor-diagnostics.md)
 保留新舊來源界線，不取代原候選的 live 證據。

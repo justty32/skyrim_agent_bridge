@@ -19,7 +19,6 @@ nice -n 19 env -u SKYRIM_FOLDER -u SKYRIM_MODS_FOLDER \
   -DVCPKG_INSTALLED_DIR="$PWD/build/release-clang-cl-linux/vcpkg_installed"
 nice -n 19 cmake --build build/actor-diagnostics-20261102 --parallel 2
 python3 -m unittest discover -s client -p 'test*.py'
-python3 -m unittest discover -s tests -v
 llvm-readobj --file-headers --coff-exports --coff-imports \
   build/actor-diagnostics-20261102/AgentBridge.dll
 sha256sum build/actor-diagnostics-20261102/AgentBridge.dll
