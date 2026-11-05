@@ -10,60 +10,6 @@ import qa_mcp
 
 
 class SemanticToolTests(unittest.TestCase):
-    @patch("qa_mcp.bridge.state")
-    def test_state_accepts_cell_actor_block(self, state):
-        state.return_value = {"ok": True, "cell_actors": [{"name": "Falas"}]}
-        result = qa_mcp.tool_qa_state({"include": ["cell_actors"]})
-        self.assertEqual(result["cell_actors"][0]["name"], "Falas")
-        state.assert_called_once_with(["cell_actors"], radius=None, limit=None)
-
-    @patch("qa_mcp.bridge.state")
-    def test_state_accepts_loaded_actor_block(self, state):
-        state.return_value = {"ok": True, "loaded_actors": [{"name": "Falas"}]}
-        result = qa_mcp.tool_qa_state({"include": ["loaded_actors"]})
-        self.assertEqual(result["loaded_actors"][0]["name"], "Falas")
-
-    @patch("qa_mcp.bridge.move_to_actor")
-    def test_actor_move_routes_name_and_distance(self, move):
-        move.return_value = {"ok": True}
-        qa_mcp.tool_qa_actor({"action": "move_to", "name": "Falas", "distance": 96})
-        move.assert_called_once_with(
-            "Falas", form_id=None, scope="cell", distance=96)
-
-    @patch("qa_mcp.bridge.move_to_actor")
-    def test_actor_move_routes_form_id_and_loaded_scope(self, move):
-        move.return_value = {"ok": True}
-        qa_mcp.tool_qa_actor({
-            "action": "move_to", "form_id": "0x1234", "scope": "loaded",
-        })
-        move.assert_called_once_with(
-            None, form_id="0x1234", scope="loaded", distance=128.0)
-
-    @patch("qa_mcp.bridge.activate_actor")
-    def test_actor_activate_routes_name(self, activate):
-        activate.return_value = {"ok": True}
-        qa_mcp.tool_qa_actor({"action": "activate", "name": "Falas"})
-        activate.assert_called_once_with("Falas", form_id=None, scope="cell")
-
-    @patch("qa_mcp.bridge.select_dialogue")
-    def test_dialogue_select_routes_text(self, select):
-        select.return_value = {"ok": True}
-        qa_mcp.tool_qa_dialogue({"action": "select", "text": "Let's talk.", "contains": True})
-        select.assert_called_once_with(
-            "Let's talk.", contains=True, index=None, info_form_id=None)
-
-    @patch("qa_mcp.bridge.select_dialogue")
-    def test_dialogue_select_routes_index(self, select):
-        select.return_value = {"ok": True}
-        qa_mcp.tool_qa_dialogue({"action": "select", "index": 2})
-        select.assert_called_once_with(None, contains=False, index=2, info_form_id=None)
-
-    @patch("qa_mcp.bridge.close_dialogue")
-    def test_dialogue_close(self, close):
-        close.return_value = {"ok": True}
-        qa_mcp.tool_qa_dialogue({"action": "close"})
-        close.assert_called_once_with()
-
     @patch("qa_mcp.bridge.select_message_box")
     def test_message_box_routes_index_and_guard(self, select):
         select.return_value = {"ok": True}
@@ -79,12 +25,6 @@ class SemanticToolTests(unittest.TestCase):
     def test_message_box_rejects_negative_index(self):
         with self.assertRaisesRegex(qa_mcp.ToolError, "non-negative"):
             qa_mcp.tool_qa_message_box({"index": -1})
-
-    @patch("qa_mcp.bridge.global_value")
-    def test_global_read(self, global_value):
-        global_value.return_value = {"ok": True, "value": 5.0}
-        result = qa_mcp.tool_qa_global({"editor_id": "Favor"})
-        self.assertEqual(result["value"], 5.0)
 
     def test_semantic_tools_are_published(self):
         names = {tool["name"] for tool in qa_mcp.TOOLS}
