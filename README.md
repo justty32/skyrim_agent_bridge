@@ -1,8 +1,9 @@
 # agent-bridge
 
 這個 SKSE plugin 在 Skyrim 行程內開啟 localhost HTTP server，讓 Linux 端 agent 讀取結構化
-遊戲狀態、執行 console、尋找與移動 actor、操作對話，全程不碰 OS 輸入或畫面層。視覺與
-操作手感仍交由人工驗收；`POST /screenshot` 與 `POST /input` 尚未實作。
+遊戲狀態、執行 console、尋找與移動 actor、操作對話，不碰 OS 輸入。
+0.10.0 加入遊戲 backbuffer [截圖候選](docs/screenshot.md)，尚待實機畫面驗收。它回本次 request 之後 copy 的畫面；同尺寸重建不保證取消，
+`X-Screenshot-Frame` 是 render callback 識別，不是 Present counter。`POST /input` 尚未實作。
 
 ## 定位與邊界
 
@@ -13,7 +14,7 @@
 
 ## Status
 
-目前版本為 0.9.0。current-cell、loaded-actor、cross-cell、retry、結構化 dialogue、結構化
+已驗證的既有功能版本為 0.9.0；0.10.0 是尚未部署的截圖候選。current-cell、loaded-actor、cross-cell、retry、結構化 dialogue、結構化
 MessageBox，以及 manifest + load-epoch baseline 路徑均已通過 runtime 驗證。
 `/state.player.collision` 提供唯讀 character-controller diagnostics，包括 active Havok shape
 tree、controller bounds 與 proxy contact margins。驗證值為：`bhkCharProxyController` capsule

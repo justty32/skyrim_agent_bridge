@@ -11,7 +11,9 @@
 
 ## 最新進度
 
-目前沒有可離線續行的 open 工作。NPC source 分拆與隔離驗證由
+截圖 0.10.0 離線候選已接線；[契約與實機待驗](../docs/screenshot.md)承接，未部署。
+
+NPC source 分拆與隔離驗證由
 [重構紀錄](workflows/refactor/actor-diagnostics.md)承接；現役 DLL 與有限 live 範圍仍見
 [候選紀錄](../docs/actor-diagnostics-build.md)，本次重構產物未部署。
 

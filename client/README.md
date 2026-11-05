@@ -8,6 +8,7 @@ contract, and a two-sided edit should be one commit.
 | Tool | Status | What it does |
 |---|---|---|
 | `mo2ctl.py` | ✅ verified end-to-end; `launch` uses the deployment script | Drive MO2 without its GUI: install / uninstall / enable / disable / launch / kill / status |
+| `screenshot.py` | 離線候選 | stdlib binary BMP 驗證與存檔；`python3 -B client/screenshot.py /tmp/new-frame.bmp`；[契約](../docs/screenshot.md) |
 | `bridge.py` | ✅ | Talking to the in-game HTTP bridge. Owns the port; everything else imports it |
 | `actor_value_probe.py` | ✅ offline-tested | Strict `getav` reader: exact engine output shape plus repeated identical reads for a chosen runtime reference |
 | `qa_runner.py` | ✅ semantic paths and baseline manifest/fingerprint gate runtime-verified | Execute a `qa.json`, including fail-closed baseline loading and retryable actor/dialogue/MessageBox steps, and report pass/fail. Schema: [QA-SCHEMA.md](QA-SCHEMA.md) |

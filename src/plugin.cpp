@@ -3,6 +3,7 @@
 #include "HttpServer.h"
 #include "Routes.h"
 #include "State.h"
+#include "Screenshot.h"
 
 namespace {
     // Fixed for now. If it ever needs to move, it moves to an ini — but the
@@ -58,6 +59,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse)
     SKSE::Init(skse);
     SetupLog();
     SKSE::log::info("AgentBridge loaded");
+    if (!Screenshot::Install()) {
+        SKSE::log::warn("AgentBridge: screenshot render hook unavailable; capture returns 503");
+    }
 
     auto* messaging = SKSE::GetMessagingInterface();
     if (!messaging->RegisterListener("SKSE", MessageHandler)) {

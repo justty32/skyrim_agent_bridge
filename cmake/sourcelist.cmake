@@ -1,4 +1,8 @@
 set(sources ${sources}
+    src/Screenshot.cpp
+    src/ScreenshotCore.cpp
+    src/ScreenshotReadback.cpp
+    src/ScreenshotHook.cpp
     src/plugin.cpp
     src/HttpServer.cpp
     src/Routes.cpp

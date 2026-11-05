@@ -9,7 +9,8 @@
 <!-- wf-nav -->
 | 領域 | 檔案 | 職責 | 測試在哪 |
 |------|------|------|---------|
-| HTTP／路由 | `src/HttpServer.*`、`src/Routes.*`、`src/ActorDiagnosticsRoute.*`、`src/RouteParsing.h`、`src/GameThread.h` | 手寫 HTTP（loopback 5099）、route 分派、marshal 到 game thread | client 測試與遊戲內驗證 |
+| 截圖 | `src/Screenshot.*`、`src/ScreenshotCore.*`、`src/ScreenshotReadback.*`、`src/ScreenshotHook.cpp`、`src/ScreenshotHookCore.h`、[screenshot.py](../../../client/screenshot.py) | render callsite 鏈、D3D readback、bounded request、BMP encoder、binary client／存檔 | `tests/native/`、`client/test_screenshot.py` |
+| HTTP／路由 | `src/HttpServer.*`、`src/Routes.*`、`src/ActorDiagnosticsRoute.*`、`src/RouteParsing.h`、`src/GameThread.h` | 手寫 HTTP（loopback 5099）、route 分派、marshal 到 game thread | `tests/http/loopback.cpp`、client 測試與遊戲內驗證 |
 | 遊戲狀態 | `src/State*.cpp`、`src/GameActions.*`、`src/ActorQueries.*`、`src/Console.*`、`src/MessageBox.*` | `/state`、actor 移動／啟動、console、結構化 MessageBox／dialogue | `client/test_bridge.py`（client 側契約） |
 | MO2 入口／交易 | [mo2ctl.py](../../../client/mo2ctl.py) | CLI、原名稱 re-export、mutating commands 與 process control；monkeypatch 的名稱及呼叫鏈留同模組 | `client/test_mo2ctl.py`、`test_mo2ctl_launch.py`、`test_mo2ctl_checkpoint.py` |
 | MO2 環境／profile | [mo2ctl_env.py](../../../client/mo2ctl_env.py)、[mo2ctl_files.py](../../../client/mo2ctl_files.py)、[mo2ctl_background.py](../../../client/mo2ctl_background.py)、[mo2ctl_manifest.py](../../../client/mo2ctl_manifest.py)、[mo2ctl_profile_lists.py](../../../client/mo2ctl_profile_lists.py)、[mo2ctl_profile_git.py](../../../client/mo2ctl_profile_git.py) | 環境、檔案、INI 還原、ledger／快照、清單、Git 語意 | 同上 |

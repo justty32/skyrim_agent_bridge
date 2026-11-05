@@ -9,6 +9,7 @@
 #include "HttpServer.h"
 #include "MessageBox.h"
 #include "State.h"
+#include "Screenshot.h"
 
 #include <cmath>
 #include <optional>
@@ -72,7 +73,28 @@ namespace {
             { "ok", true },
             { "plugin", "AgentBridge" },
             { "version", AGENT_BRIDGE_VERSION },
-            { "capabilities", { { "actor_diagnostics", json::array({ 1 }) } } },
+            { "capabilities", { { "actor_diagnostics", json::array({ 1 }) }, { "screenshot", json::array({ 1 }) } } },
+        });
+    }
+
+    Http::Response ScreenshotRoute(const Http::Request& req)
+    {
+        try {
+            if (!req.query.empty()) return Http::Response::Error(400, "screenshot takes no query parameters");
+            const auto body = json::parse(req.body.empty() ? "{}" : req.body);
+            if (!body.is_object() || !body.empty()) {
+                return Http::Response::Error(400, "screenshot body must be an empty object");
+            }
+        } catch (const std::exception&) {
+            return Http::Response::Error(400, "screenshot body must be an empty JSON object");
+        }
+        auto result = Screenshot::Capture();
+        if (!result.error.empty()) return Http::Response::Error(503, result.error);
+        return Http::Response::Binary(std::move(result.bytes), "image/bmp", {
+            { "X-Screenshot-Request", std::to_string(result.requestId) },
+            { "X-Screenshot-Frame", std::to_string(result.frameId) },
+            { "X-Screenshot-Width", std::to_string(result.width) },
+            { "X-Screenshot-Height", std::to_string(result.height) },
         });
     }
 
@@ -280,7 +302,9 @@ namespace {
 
 void Routes::Register()
 {
+    Http::OnStop(Screenshot::Stop);
     Http::Route("GET", "/ping", Ping);
+    Http::Route("POST", "/screenshot", ScreenshotRoute);
     Http::Route("GET", "/state", StateRoute);
     Http::Route("GET", "/global", GlobalRead);
     Http::Route("GET", "/actor/diagnostics", ActorDiagnosticsRoute::Handle);

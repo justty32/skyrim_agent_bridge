@@ -1,4 +1,8 @@
 set(headers ${headers}
+    src/ScreenshotHookCore.h
+    src/Screenshot.h
+    src/ScreenshotCore.h
+    src/ScreenshotReadback.h
     src/PCH.h
     src/log.h
     src/GameThread.h

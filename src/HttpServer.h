@@ -4,6 +4,8 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <vector>
+#include <nlohmann/json.hpp>
 
 // Minimal HTTP/1.1 server on 127.0.0.1, living inside the Skyrim process.
 //
@@ -29,6 +31,22 @@ namespace Http {
         int status = 200;
         nlohmann::json body = nlohmann::json::object();
 
+        // Trailing fields preserve existing aggregate {status, json} callers.
+        std::vector<std::uint8_t> bytes;
+        std::string mime;
+        bool binary = false;
+        std::unordered_map<std::string, std::string> headers;
+        static constexpr std::size_t MaxBinaryBytes = 34u * 1024u * 1024u;
+        static Response Binary(std::vector<std::uint8_t> data, std::string type,
+            std::unordered_map<std::string, std::string> extra = {}) {
+            Response response;
+            response.binary = true;
+            response.bytes = std::move(data);
+            response.mime = std::move(type);
+            response.headers = std::move(extra);
+            return response;
+        }
+
         static Response Ok(nlohmann::json j) { return { 200, std::move(j) }; }
         static Response Error(int status, std::string_view msg) {
             return { status, { { "ok", false }, { "error", std::string{ msg } } } };
@@ -45,6 +63,8 @@ namespace Http {
     // bridge that can't listen must not stop the game from loading.
     bool Start(std::uint16_t port);
 
+    // Register before Start; invoked after cancellation and before joining the worker.
+    void OnStop(std::function<void()> handler);
     void Stop();
 
     bool IsRunning();
