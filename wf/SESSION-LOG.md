@@ -11,7 +11,7 @@
 
 ## 最新進度
 
-截圖 0.10.0 離線候選已接線；[契約與實機待驗](../docs/screenshot.md)承接，未部署。
+- [feature-dev] 使用者11-05裁示的`/input`尚未實作；下一切片先核單鍵tap的原生dispatch／所有權。截圖0.10.0已部署並完成有限live，補充實機邊界由母repo WAIT承接，見[契約](../docs/screenshot.md)。
 
 NPC source 分拆與隔離驗證由
 [重構紀錄](workflows/refactor/actor-diagnostics.md)承接；現役 DLL 與有限 live 範圍仍見

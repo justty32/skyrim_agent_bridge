@@ -2,7 +2,7 @@
 
 [文件入口](README.md)｜[API](api.md)｜[client](../client/README.md)
 
-0.10.0 是離線候選，尚未部署或通過遊戲畫面驗收。`POST /screenshot` 接收空 body 或 `{}`，
+0.10.0 已完成離線與一次有限實機驗證；未驗範圍見下方紀錄。`POST /screenshot` 接收空 body 或 `{}`，
 不接受參數；成功回 `image/bmp`，失敗維持 JSON `ok:false,error`。只擷取目前遊戲
 swapchain backbuffer，不讀桌面、不搶焦點。
 
@@ -57,7 +57,7 @@ host 測試直接驗 BMP encoder、readback pipeline／request service；HTTP lo
 production transport，client 使用 stdlib 真 loopback。命令見 [testing](../wf/workflows/testing.md)。
 本機 build backup 僅保留前一個 build DLL，並不代表現役已部署 DLL 或可用 live rollback。
 
-待使用者驗的五項 runtime 行為：
+完整五項 runtime 驗收範圍（本輪只覆蓋部分情境）：
 
 1. 兩次改鏡頭擷取，尺寸／frame／hash改變且目視符合 HUD 與場景。
 2. 最小化／無新 frame 在 deadline 內回503，恢復後新請求成功，沒有舊圖。
@@ -65,3 +65,20 @@ production transport，client 使用 stdlib 真 loopback。命令見 [testing](.
 4. client 中斷與連續20次擷取後遊戲／ping存活、COM/GPU資源沒有持續增長。
 5. 與現役 SKSE Menu Framework／其他 render hook 共存，predecessor 次數／返回保持，
    確認 overlay 範圍與 Proton/DXVK 色彩、黑畫面及效能。
+
+### 2026-11-05 有限實機紀錄
+
+本機 Skyrim 1.6.1170／Proton 環境，fresh SKSE 載入0.10.0與SKSE Menu Framework、
+`/ping`與`/state`均可用。主選單及單一室內場景擷取1920×1080 BMP成功；使用者確認兩次
+不同鏡頭的方向、色彩與HUD相符，request與callback識別及像素hash均不同。
+
+主選單連續20次擷取20/20成功；client中斷後端點仍存活。process RSS前後增加約16MiB，
+只是一段觀察，不是COM/GPU無洩漏證明。使用者回報最小化後仍有新render callback與新BMP，
+因此未重現無frame timeout；不得說此項實機503已驗。
+
+使用者恢復遊戲後，新request與新callback的1920×1080擷取再次成功；`/ping`／`/state`仍存活，
+本輪無新增crash，原profile內容保持不變，遊戲留給使用者繼續操作。
+
+同尺寸重建／裝置故障／Map失敗、所有hook安裝順序及overlay、長時間GPU資源行為均未完整實機驗證。
+本輪DLL SHA256為`65ff23d0aca9b5d4fc16d3f52ba15f34dae629813964621e28e68c8f8d1eadd5`，
+matching程式來源為`d5601b7`；本節為後續文件紀錄，不變更該候選binary。
